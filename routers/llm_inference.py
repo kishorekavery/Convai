@@ -41,6 +41,17 @@ BedrockInstrumentor().instrument(tracer_provider=tracer_provider)
 tracer = tracer_provider.get_tracer(__name__)
 
 
+def rate_limiter_dep():
+    global tracer
+
+    parent_span = tracer.start_span("chat_chain", kind=SpanKind.SERVER)
+    parent_span.set_attribute(SpanAttributes.OPENINFERENCE_SPAN_KIND, OpenInferenceSpanKindValues.CHAIN.value)
+
+    async def _dep(request: ChatCompletionRequest):  # FastAPI will inject request here
+        return await rate_limiter(request, tracer, parent_span)
+    return _dep
+
+
 ## Define the router config
 router = APIRouter(
     prefix= "/AI",
@@ -49,21 +60,19 @@ router = APIRouter(
 
 @router.post("/chat-completion")
 async def chat_completion(
-    request_data= Depends(rate_limiter)
+    request_data= Depends(rate_limiter_dep())
     ):
-    global tracer
-
-    parent_span = tracer.start_span("chat_chain", kind=SpanKind.SERVER)
-    parent_span.set_attribute(SpanAttributes.OPENINFERENCE_SPAN_KIND, OpenInferenceSpanKindValues.CHAIN.value)
-    
-    ctx = set_span_in_context(parent_span)
 
     try:
+        global tracer 
+
         ## To return the response time
         start_time = time.time()
 
         pool = request_data['pool']
         request = request_data['request']
+        ctx = request_data['ctx']
+        parent_span= request_data['parent_span']
         
         ## Assign request parameters to variables
         chat_history = request.chat_history
@@ -73,7 +82,6 @@ async def chat_completion(
         facm_code = request.facm_code
         
         parent_span.set_attributes({
-            SpanAttributes.INPUT_VALUE: raw_user_input,
             SpanAttributes.METADATA: json.dumps(
                 {"payload": {
                     "client": database_name,
@@ -148,13 +156,6 @@ async def chat_completion(
         embedding_model = TitanEmbeddingModel()
         text_generation_model = LlamaModel()
 
-        ## Validate the database existence
-        # await validate_database(database_name)
-        
-        
-        ## Establish Database Connection Pool
-        # pool = await connect_to_db(database_name=database_name)
-
     ## ---- Generate Vector of the user input -------------------------------------------------------------------------------------- #
         with tracer.start_as_current_span("2. embedding_generation", context=ctx, kind=SpanKind.CLIENT) as span2:
             span2.set_attributes({
@@ -202,9 +203,7 @@ async def chat_completion(
                 "llm.system": "bedrock",
                 "llm.model_name": str(CHAT_MODEL_ID),
                 "llm.input_messages.0.message.role": "system",
-                "llm.input_messages.0.message.content":  str(sql_generation_prompt),
-                "llm.output_messages.0.message.role": "assistant",
-                "llm.output_messages.0.message.content":  str(sql),
+                "llm.input_messages.0.message.content":  str(sql_generation_prompt)
             })
 
             span3.set_status(Status(StatusCode.OK))
