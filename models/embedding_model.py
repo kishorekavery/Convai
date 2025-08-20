@@ -8,7 +8,7 @@ class TitanEmbeddingModel(BedrockClient):
     def __init__(self):
         super().__init__(model_id=EMBEDDING_MODEL_ID, contentType=EMBEDDING_MODEL_CONTENT_TYPE, accept=EMBEDDING_MODEL_ACCEPT)
         
-    def generate_embedding(self, text: str, span):
+    def generate_embedding(self, text: str, span = None):
         try:
             if not text or not isinstance(text, str):
                 raise ValueError("Input text must be a non-empty string.")
@@ -22,11 +22,12 @@ class TitanEmbeddingModel(BedrockClient):
             response = self.invoke_model(payload)
 
             logging.info("Embedding Model Invoked")
-
-            span.set_attributes({
-                "llm.input_messages.0.message.role": "system",
-                "llm.input_messages.0.message.content":  str(payload),
-            })
+            
+            if span:
+                span.set_attributes({
+                    "llm.input_messages.0.message.role": "system",
+                    "llm.input_messages.0.message.content":  str(payload),
+                })
 
             embedding= response.get("embedding")
             inputtext_token = response.get("inputTextTokenCount")
@@ -43,7 +44,8 @@ class TitanEmbeddingModel(BedrockClient):
             return embedding
         except Exception as e:
             logging.error("Failed to generate embedding: %s", str(e), exc_info=True)
-            span.record_exception(e)
+            if span:
+                span.record_exception(e)
             raise RuntimeError(f"Embedding generation failed: {e}")
         
 

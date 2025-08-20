@@ -40,14 +40,13 @@ BedrockInstrumentor().instrument(tracer_provider=tracer_provider)
 # 3. Get tracer for manual spans
 tracer = tracer_provider.get_tracer(__name__)
 
-
 def rate_limiter_dep():
     global tracer
 
-    parent_span = tracer.start_span("chat_chain", kind=SpanKind.SERVER)
-    parent_span.set_attribute(SpanAttributes.OPENINFERENCE_SPAN_KIND, OpenInferenceSpanKindValues.CHAIN.value)
-
     async def _dep(request: ChatCompletionRequest):  # FastAPI will inject request here
+        parent_span = tracer.start_span("chat_chain", kind=SpanKind.SERVER)
+        parent_span.set_attribute(SpanAttributes.OPENINFERENCE_SPAN_KIND, OpenInferenceSpanKindValues.CHAIN.value)
+        
         return await rate_limiter(request, tracer, parent_span)
     return _dep
 
@@ -72,7 +71,7 @@ async def chat_completion(
         pool = request_data['pool']
         request = request_data['request']
         ctx = request_data['ctx']
-        parent_span= request_data['parent_span']
+        parent_span = request_data['parent_span']
         
         ## Assign request parameters to variables
         chat_history = request.chat_history
@@ -80,22 +79,6 @@ async def chat_completion(
         database_name = request.database_name
         user_id = request.user_id
         facm_code = request.facm_code
-        
-        parent_span.set_attributes({
-            SpanAttributes.METADATA: json.dumps(
-                {"payload": {
-                    "client": database_name,
-                    "user_id": user_id,
-                    'facm_code': facm_code,
-                    'chat_history': chat_history
-                    },
-                    "user_quota_details": {
-                        "quota" : request_data['quota'],
-                        "current_usage" : request_data['current_usage']
-                    }
-                }
-            )
-        })
     
         logging.info("Client Domain: %s", database_name)
         logging.info("Client User Id: %s", user_id)
