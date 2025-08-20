@@ -2,7 +2,9 @@ from fastapi import HTTPException, status, APIRouter, Depends
 from fastapi.responses import StreamingResponse, Response
 import time
 from tabulate import tabulate
-import json
+import asyncio
+import functools
+import threading
 
 ## Internal Packages
 from config.logger_config import get_logger
@@ -20,7 +22,7 @@ from agents.sql_agent import sql_agent
 from agents.intent_classification_agent import intent_classification
 from routers.rate_limiters import rate_limiter
 ## Tracing
-# from opentelemetry
+from opentelemetry import trace
 from opentelemetry.trace import set_span_in_context, SpanKind, Status, StatusCode
 from openinference.instrumentation.bedrock import BedrockInstrumentor
 from openinference.semconv.trace import SpanAttributes, OpenInferenceSpanKindValues
@@ -46,7 +48,7 @@ def rate_limiter_dep():
     async def _dep(request: ChatCompletionRequest):  # FastAPI will inject request here
         parent_span = tracer.start_span("chat_chain", kind=SpanKind.SERVER)
         parent_span.set_attribute(SpanAttributes.OPENINFERENCE_SPAN_KIND, OpenInferenceSpanKindValues.CHAIN.value)
-        
+
         return await rate_limiter(request, tracer, parent_span)
     return _dep
 
@@ -65,6 +67,8 @@ async def chat_completion(
     try:
         global tracer 
 
+        loop = asyncio.get_running_loop()
+
         ## To return the response time
         start_time = time.time()
 
@@ -79,7 +83,7 @@ async def chat_completion(
         database_name = request.database_name
         user_id = request.user_id
         facm_code = request.facm_code
-    
+        # print('start')
         logging.info("Client Domain: %s", database_name)
         logging.info("Client User Id: %s", user_id)
         logging.info("Raw User Input: %s", raw_user_input)
@@ -95,8 +99,18 @@ async def chat_completion(
                 "info": "Classify the user input to determine the intent and return the action to be taken",
                 })
             
-            intent = intent_classification(processed_user_input, chat_history, span=span1)
+            # intent = intent_classification(processed_user_input, chat_history, span=span1)
+            def _intent_classification(processed_user_input, chat_history, span):
+                with trace.use_span(span):
+                    return intent_classification(processed_user_input, chat_history, span)
+                
+            intent_results = await asyncio.gather(*[loop.run_in_executor(None, 
+                                    functools.partial(_intent_classification, processed_user_input, chat_history, span=span1))
+                                ])
             
+            # print('intent')
+            intent = intent_results[0]
+
             span1.set_attributes({
                 "llm.system": "bedrock",
                 "llm.model_name": str(CLASSIFICATION_MODEL_ID),
@@ -105,7 +119,7 @@ async def chat_completion(
             })
 
             span1.set_status(Status(StatusCode.OK))
-
+        
         if intent["action"] == "return_greeting":
             # print("Intent Classification Result:", intent["action"])
             logging.info("Returning greeting response.")
@@ -138,7 +152,7 @@ async def chat_completion(
 
         embedding_model = TitanEmbeddingModel()
         text_generation_model = LlamaModel()
-
+        # print('models')
     ## ---- Generate Vector of the user input -------------------------------------------------------------------------------------- #
         with tracer.start_as_current_span("2. embedding_generation", context=ctx, kind=SpanKind.CLIENT) as span2:
             span2.set_attributes({
@@ -146,8 +160,18 @@ async def chat_completion(
                 "info": "Generates embedding of the processed user query",
             })
             
-            embedded_user_input = embedding_model.generate_embedding(processed_user_input, span=span2)
-            
+            # embedded_user_input = embedding_model.generate_embedding(processed_user_input, span=span2)
+            def _embedding_generation(processed_user_input, span):
+                with trace.use_span(span):
+                    return embedding_model.generate_embedding(processed_user_input, span)
+                
+            embedding_result = await asyncio.gather(*[loop.run_in_executor(None, 
+                                    functools.partial(_embedding_generation, processed_user_input, span=span2)
+                                    )
+                                ])
+            # print('embedding')
+            embedded_user_input = embedding_result[0]
+
             span2.set_attributes({
                 "llm.system": "bedrock",
                 "llm.model_name": str(EMBEDDING_MODEL_ID),
@@ -156,7 +180,7 @@ async def chat_completion(
             })
 
             span2.set_status(Status(StatusCode.OK))
-
+            
         ## Retrieve Context for the user input
         table_schema, context_for_sql_generation, context_for_user_response = await fetch_context(str(embedded_user_input), tableschema_dbconnection_pool=pool)
         
@@ -175,8 +199,9 @@ async def chat_completion(
             ## Prompt = Instructions + table schema + example + user_input
             sql_generation_prompt = format_sql_prompt(raw_user_input, user_details, facm_code , table_schema, context_for_sql_generation, chat_history)
 
-            table_rows, sql = await sql_agent(start_time, sql_generation_prompt, pool, text_generation_model, span=span3)
-
+            table_rows, sql = await sql_agent(start_time, sql_generation_prompt, pool, text_generation_model, span3, loop, trace)
+            
+            # print('sql generation')
             #user quota reduction after successful SQL Generation
             async with pool.acquire() as conn:
                 await conn.execute(UPDATE_USER_QUOTA_USAGE, int(user_id))
@@ -203,7 +228,7 @@ async def chat_completion(
             data = [dict(row) for row in table_rows]
             table_rows = tabulate(data, headers="keys", tablefmt="grid")
         
-        def traced_stream(ctx, buffer_container):
+        async def traced_stream(ctx, buffer_container):
 
             with tracer.start_as_current_span("4. final_response", context=ctx, kind=SpanKind.CLIENT) as span4:
                 span4.set_attributes({
@@ -214,11 +239,28 @@ async def chat_completion(
                 try:
 
                     response_to_user_prompt = format_response_to_user_prompt(raw_user_input, context_for_user_response, table_rows, chat_history)
+                    queue = asyncio.Queue()
 
-                    for chunk in text_generation_model.generate_stream_response(response_to_user_prompt, span4):
+                    # Background worker (runs in thread)
+                    def producer():
+                        with trace.use_span(span4):
+                            try:
+                                for chunk in text_generation_model.generate_stream_response(response_to_user_prompt, span4):
+                                    loop.call_soon_threadsafe(queue.put_nowait, chunk)
+                            finally:
+                                loop.call_soon_threadsafe(queue.put_nowait, None)  # signal end of stream
+
+                    threading.Thread(target=producer, daemon=True).start()
+                    # print('final response')
+
+                    # Consume from queue as items arrive
+                    while True:
+                        chunk = await queue.get()
+                        if chunk is None:  # end of stream
+                            break
                         buffer_container.append(chunk)
                         yield chunk
-
+                    
                     buffer = "".join(buffer_container)
                     span4.set_attributes({
                         "llm.system": "bedrock",

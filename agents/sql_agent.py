@@ -1,5 +1,7 @@
 from fastapi import status, HTTPException
 import time
+import asyncio
+import functools
 
 ## Internal Packages
 from config.logger_config import get_logger
@@ -8,10 +10,21 @@ from database.db_queries import execute_ai_generated_sql, clean_sql_query
 ## Initiate Logger
 logging = get_logger(__name__)
 
-async def sql_agent(start_time, sql_generation_prompt, client_dbconnection_pool, text_generation_model, span):
+async def sql_agent(start_time, sql_generation_prompt, client_dbconnection_pool, text_generation_model, span, event_loop, trace):
     
     ## Give prompt to the LLM to generate SQL
-    sql = text_generation_model.generate_response(sql_generation_prompt)
+    # sql = text_generation_model.generate_response(sql_generation_prompt)
+    
+    def _sql_generation(sql_generation_prompt, span):
+        with trace.use_span(span):
+            return text_generation_model.generate_response(sql_generation_prompt)
+
+    sql_result = await asyncio.gather(*[event_loop.run_in_executor(None, 
+                        functools.partial(_sql_generation, sql_generation_prompt, span)
+                        )
+                    ])
+    
+    sql = sql_result[0]
 
     span.set_attributes({
                 "llm.output_messages.0.message.role": "assistant",

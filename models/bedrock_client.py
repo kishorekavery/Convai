@@ -5,8 +5,6 @@ import boto3
 from botocore.exceptions import BotoCoreError, NoCredentialsError, EndpointConnectionError
 from fastapi import HTTPException, status
 from time import time
-from openinference.semconv.trace import SpanAttributes
-from opentelemetry import trace
 
 # Load logger
 logging = get_logger(__name__)
