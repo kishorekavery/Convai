@@ -11,7 +11,6 @@ from config.logger_config import get_logger
 from config.settings import EMBEDDING_MODEL_ID, CHAT_MODEL_ID, CLASSIFICATION_MODEL_ID, COLLECTOR_ENDPOINT, COLLECTOR_PROJECT_NAME
 from models.data_models import ChatCompletionRequest
 from dataprocessing.user_query_processing import process_user_query
-from database.db_connection import connect_to_db, validate_database
 from database.db_queries import fetch_context, fetch_user_details
 from database.db_queries import UPDATE_USER_QUOTA_USAGE
 from prompts.prompts_templates import format_sql_prompt, format_response_to_user_prompt
@@ -23,7 +22,7 @@ from agents.intent_classification_agent import intent_classification
 from routers.rate_limiters import rate_limiter
 ## Tracing
 from opentelemetry import trace
-from opentelemetry.trace import set_span_in_context, SpanKind, Status, StatusCode
+from opentelemetry.trace import SpanKind, Status, StatusCode
 from openinference.instrumentation.bedrock import BedrockInstrumentor
 from openinference.semconv.trace import SpanAttributes, OpenInferenceSpanKindValues
 from phoenix.otel import register
@@ -42,15 +41,14 @@ BedrockInstrumentor().instrument(tracer_provider=tracer_provider)
 # 3. Get tracer for manual spans
 tracer = tracer_provider.get_tracer(__name__)
 
-def rate_limiter_dep():
+
+async def _dep(request: ChatCompletionRequest = None):  # FastAPI will inject request here
     global tracer
 
-    async def _dep(request: ChatCompletionRequest):  # FastAPI will inject request here
-        parent_span = tracer.start_span("chat_chain", kind=SpanKind.SERVER)
-        parent_span.set_attribute(SpanAttributes.OPENINFERENCE_SPAN_KIND, OpenInferenceSpanKindValues.CHAIN.value)
+    parent_span = tracer.start_span("chat_chain", kind=SpanKind.SERVER)
+    parent_span.set_attribute(SpanAttributes.OPENINFERENCE_SPAN_KIND, OpenInferenceSpanKindValues.CHAIN.value)
 
-        return await rate_limiter(request, tracer, parent_span)
-    return _dep
+    return await rate_limiter(request, tracer, parent_span)
 
 
 ## Define the router config
@@ -61,7 +59,7 @@ router = APIRouter(
 
 @router.post("/chat-completion")
 async def chat_completion(
-    request_data= Depends(rate_limiter_dep())
+    request_data= Depends(_dep)
     ):
 
     try:
@@ -104,9 +102,9 @@ async def chat_completion(
                 with trace.use_span(span):
                     return intent_classification(processed_user_input, chat_history, span)
                 
-            intent_results = await asyncio.gather(*[loop.run_in_executor(None, 
+            intent_results = await asyncio.gather(loop.run_in_executor(None, 
                                     functools.partial(_intent_classification, processed_user_input, chat_history, span=span1))
-                                ])
+                                )
             
             # print('intent')
             intent = intent_results[0]
@@ -165,10 +163,10 @@ async def chat_completion(
                 with trace.use_span(span):
                     return embedding_model.generate_embedding(processed_user_input, span)
                 
-            embedding_result = await asyncio.gather(*[loop.run_in_executor(None, 
+            embedding_result = await asyncio.gather(loop.run_in_executor(None, 
                                     functools.partial(_embedding_generation, processed_user_input, span=span2)
                                     )
-                                ])
+                                )
             # print('embedding')
             embedded_user_input = embedding_result[0]
 
