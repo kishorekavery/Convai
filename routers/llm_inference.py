@@ -42,7 +42,7 @@ BedrockInstrumentor().instrument(tracer_provider=tracer_provider)
 tracer = tracer_provider.get_tracer(__name__)
 
 
-async def _dep(request: ChatCompletionRequest = None):  # FastAPI will inject request here
+async def _dep(request: ChatCompletionRequest):  # FastAPI will inject request here
     global tracer
 
     parent_span = tracer.start_span("chat_chain", kind=SpanKind.SERVER)
