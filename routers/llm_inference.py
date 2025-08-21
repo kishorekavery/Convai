@@ -1,5 +1,5 @@
 from fastapi import HTTPException, status, APIRouter, Depends
-from fastapi.responses import StreamingResponse, Response
+from fastapi.responses import Response
 import time
 from tabulate import tabulate
 import asyncio
@@ -14,6 +14,7 @@ from dataprocessing.user_query_processing import process_user_query
 from database.db_queries import fetch_context, fetch_user_details
 from database.db_queries import UPDATE_USER_QUOTA_USAGE
 from prompts.prompts_templates import format_sql_prompt, format_response_to_user_prompt
+from responses.streaming_response import CustomStreamingResponse as StreamingResponse
 ## Initiate the models
 from models.embedding_model import TitanEmbeddingModel
 from models.text_generation_model import LlamaModel
@@ -151,6 +152,7 @@ async def chat_completion(
         embedding_model = TitanEmbeddingModel()
         text_generation_model = LlamaModel()
         # print('models')
+    
     ## ---- Generate Vector of the user input -------------------------------------------------------------------------------------- #
         with tracer.start_as_current_span("2. embedding_generation", context=ctx, kind=SpanKind.CLIENT) as span2:
             span2.set_attributes({
@@ -179,6 +181,8 @@ async def chat_completion(
 
             span2.set_status(Status(StatusCode.OK))
             
+    ## ---- Generate SQL for the user input -------------------------------------------------------------------------------------- #
+
         ## Retrieve Context for the user input
         table_schema, context_for_sql_generation, context_for_user_response = await fetch_context(str(embedded_user_input), tableschema_dbconnection_pool=pool)
         
@@ -199,11 +203,10 @@ async def chat_completion(
 
             table_rows, sql = await sql_agent(start_time, sql_generation_prompt, pool, text_generation_model, span3, loop, trace)
             
-            # print('sql generation')
             #user quota reduction after successful SQL Generation
-            async with pool.acquire() as conn:
-                await conn.execute(UPDATE_USER_QUOTA_USAGE, int(user_id))
-                # print("user quota updated")
+            # async with pool.acquire() as conn:
+            #     await conn.execute(UPDATE_USER_QUOTA_USAGE, int(user_id))
+            # logging.info("User Quota Updated")
 
             span3.set_attributes({
                 "llm.system": "bedrock",
@@ -225,9 +228,10 @@ async def chat_completion(
             ## Convert each asyncpg Record to a dictionary
             data = [dict(row) for row in table_rows]
             table_rows = tabulate(data, headers="keys", tablefmt="grid")
-        
-        async def traced_stream(ctx, buffer_container):
+    
+    ## ---- Generate Final Response for the user input -------------------------------------------------------------------------------------- #        
 
+        async def traced_stream(ctx, buffer_container):
             with tracer.start_as_current_span("4. final_response", context=ctx, kind=SpanKind.CLIENT) as span4:
                 span4.set_attributes({
                     SpanAttributes.OPENINFERENCE_SPAN_KIND: OpenInferenceSpanKindValues.LLM.value,
@@ -235,8 +239,8 @@ async def chat_completion(
                 })
                 
                 try:
-
                     response_to_user_prompt = format_response_to_user_prompt(raw_user_input, context_for_user_response, table_rows, chat_history)
+                    
                     queue = asyncio.Queue()
 
                     # Background worker (runs in thread)
@@ -249,7 +253,6 @@ async def chat_completion(
                                 loop.call_soon_threadsafe(queue.put_nowait, None)  # signal end of stream
 
                     threading.Thread(target=producer, daemon=True).start()
-                    # print('final response')
 
                     # Consume from queue as items arrive
                     while True:
@@ -280,7 +283,8 @@ async def chat_completion(
         buffer_container=[]
 
         api_response = StreamingResponse(traced_stream(ctx, buffer_container), media_type="text/plain", 
-                                            parent_span=parent_span, buffer_container=buffer_container)
+                                            parent_span=parent_span, buffer_container=buffer_container, 
+                                            db_pool=pool, user_id=user_id, quoate_usage_update_query=UPDATE_USER_QUOTA_USAGE)
         
         api_response.headers["X-Response-Time"] = f"{process_time:.6f} seconds"
         

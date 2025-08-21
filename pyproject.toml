@@ -32,6 +32,7 @@ dependencies = [
     "openinference-instrumentation-bedrock>=0.1.26",
     "openinference-semantic-conventions>=0.1.21",
     "opentelemetry-instrumentation-fastapi>=0.57b0",
+    "pip==25.0.1",
     "pydantic==2.10.6",
     "pydantic-core==2.27.2",
     "pygments==2.19.1",
