@@ -21,18 +21,19 @@ async def rate_limiter(request: ChatCompletionRequest, tracer, parent_span):
         
         pool = await connect_to_db(database_name)
 
-        parent_span.set_attributes({SpanAttributes.INPUT_VALUE: user_input,})
+        parent_span.set_attributes({SpanAttributes.INPUT_VALUE: user_input})
+
         ctx = set_span_in_context(parent_span)
 
-        parent_span.set_attributes({
-            "metadata.payload": json.dumps({   
-                    "client": database_name,
-                    "user_input": user_input,
-                    "user_id": user_id,
-                    'facm_code': facm_code,
-                    'chat_history': chat_history
-            })
-        })
+        metadata_payload = {   
+                    "metadata.payload.client": database_name,
+                    "metadata.payload.user_input": user_input,
+                    "metadata.payload.user_id": user_id,
+                    'metadata.payload.facm_code': facm_code,
+                    'metadata.payload.chat_history': chat_history
+                }
+        
+        parent_span.set_attributes(metadata_payload)
 
         with tracer.start_as_current_span("Rate Limiter", context=ctx, kind=SpanKind.INTERNAL) as rate_limiter:
             rate_limiter.set_attributes({
@@ -47,7 +48,7 @@ async def rate_limiter(request: ChatCompletionRequest, tracer, parent_span):
                     error=f"For the user: '{user_id}' in '{database_name}'. No quota is aasigned"
                     logging.exception(error)
                     rate_limiter.set_status(Status(StatusCode.ERROR, description=str(error)))
-                    parent_span.set_status(Status(StatusCode.ERROR))
+                    parent_span.set_status(Status(StatusCode.ERROR, description=str(error)))
                     parent_span.end()
 
                     raise HTTPException(
@@ -62,7 +63,7 @@ async def rate_limiter(request: ChatCompletionRequest, tracer, parent_span):
                     error=f"For the user: '{user_id}' in '{database_name}'. Rate limit exceeded"
                     logging.exception(error)
                     rate_limiter.set_status(Status(StatusCode.ERROR, description=str(error)))
-                    parent_span.set_status(Status(StatusCode.ERROR))
+                    parent_span.set_status(Status(StatusCode.ERROR, description=str(error)))
                     parent_span.end()
 
                     raise HTTPException(
@@ -72,19 +73,20 @@ async def rate_limiter(request: ChatCompletionRequest, tracer, parent_span):
                 
                 user_quota = row['uaq_quota_limit']
                 user_quota_used = row['uaq_used_count']
+
+                metadata_user_quota_details = {
+                            "metadata.user_quota_details.quota" : user_quota,
+                            "metadata.user_quota_details.current_usage" : user_quota_used
+                            }
                 
-                parent_span.set_attributes({
-                    "metadata.user_quota_details": json.dumps({
-                            "quota" : user_quota,
-                            "current_usage" : user_quota_used
-                    })
-                })
+                parent_span.set_attributes(metadata_user_quota_details)
 
                 rate_limiter.set_status(Status(StatusCode.OK))
 
                 logging.info(f"Quota: {user_quota}\nUsage: {user_quota_used}")
 
             return {"pool": pool, "request": request, "ctx": ctx, "parent_span": parent_span}
+        
     except HTTPException as http_exc:
         parent_span.record_exception(http_exc)
         parent_span.set_status(Status(StatusCode.ERROR, description=str(http_exc)))
