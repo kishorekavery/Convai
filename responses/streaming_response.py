@@ -29,23 +29,7 @@ FastAPI Version Details:
 
 from __future__ import annotations
 
-import hashlib
-import http.cookies
-import json
-import os
-import re
-import stat
 import typing
-import warnings
-from datetime import datetime
-from email.utils import format_datetime, formatdate
-from functools import partial
-from mimetypes import guess_type
-from secrets import token_hex
-from urllib.parse import quote
-
-import anyio
-import anyio.to_thread
 
 from starlette._utils import collapse_excgroups
 from starlette.background import BackgroundTask
@@ -116,7 +100,6 @@ class CustomStreamingResponse(StreamingResponse):
             await asyncio.shield(self._update_user_quota())
 
         finally:
-            print('Custom Streaming Response File')
             self.parent_span.set_attribute(SpanAttributes.OUTPUT_VALUE, "".join(self.buffer_container))
             self.parent_span.set_status(Status(StatusCode.OK))
             self.parent_span.end()
