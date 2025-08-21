@@ -51,5 +51,5 @@ CLASSIFICATION_MODEL_TOP_P=0.9
 
 
 # LLM Tracing Tool
-COLLECTOR_PROJECT_NAME="mw-copilot-sql-bot-bedrock"
+COLLECTOR_PROJECT_NAME="async-mw-copilot-sql-bot-bedrock"
 COLLECTOR_ENDPOINT="http://maintverse.com:6006/v1/traces"
