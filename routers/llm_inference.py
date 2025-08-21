@@ -203,10 +203,14 @@ async def chat_completion(
 
             table_rows, sql = await sql_agent(start_time, sql_generation_prompt, pool, text_generation_model, span3, loop, trace)
             
-            #user quota reduction after successful SQL Generation
-            # async with pool.acquire() as conn:
-            #     await conn.execute(UPDATE_USER_QUOTA_USAGE, int(user_id))
-            # logging.info("User Quota Updated")
+            ## user quota reduction after successful SQL Generation
+            async with pool.acquire() as conn:
+                await conn.execute(UPDATE_USER_QUOTA_USAGE, int(user_id))
+
+                logging.info("User Quota Updated after SQL generation")
+                parent_span.set_attributes({
+                    "metadata.user_quota_details.updated_after_SQL": True
+                })
 
             span3.set_attributes({
                 "llm.system": "bedrock",
@@ -284,7 +288,8 @@ async def chat_completion(
 
         api_response = StreamingResponse(traced_stream(ctx, buffer_container), media_type="text/plain", 
                                             parent_span=parent_span, buffer_container=buffer_container, 
-                                            db_pool=pool, user_id=user_id, quoate_usage_update_query=UPDATE_USER_QUOTA_USAGE)
+                                            db_pool=pool, user_id=user_id, quoate_usage_update_query=UPDATE_USER_QUOTA_USAGE,
+                                            logging=logging)
         
         api_response.headers["X-Response-Time"] = f"{process_time:.6f} seconds"
         

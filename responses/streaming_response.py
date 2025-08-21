@@ -55,6 +55,7 @@ class CustomStreamingResponse(StreamingResponse):
         quoate_usage_update_query,
         parent_span,
         buffer_container,
+        logging,
         status_code: int = 200,
         headers: typing.Mapping[str, str] | None = None,
         media_type: str | None = None,
@@ -72,6 +73,7 @@ class CustomStreamingResponse(StreamingResponse):
         self.quoate_usage_update_query = quoate_usage_update_query
         self.parent_span = parent_span
         self.buffer_container = buffer_container
+        self.logging = logging
 
     async def _update_user_quota(self):
         '''
@@ -79,8 +81,12 @@ class CustomStreamingResponse(StreamingResponse):
         '''
         async with self.pool.acquire() as conn:
             await conn.execute(self.quoate_usage_update_query, int(self.user_id))
+            self.logging.info("User Quota Updated after final response generation")
 
     async def stream_response(self, send: Send) -> None:
+        
+        update_quota_after_final_response=False
+        
         try:
             await send(
                 {
@@ -96,10 +102,15 @@ class CustomStreamingResponse(StreamingResponse):
             
             await send({"type": "http.response.body", "body": b"", "more_body": False})
 
-            # Enable if user quota usage has to be updated after final response
-            await asyncio.shield(self._update_user_quota())
+            # # Enable if user quota usage has to be updated after final response
+            # update_quota_after_final_response=True
+            # await asyncio.shield(self._update_user_quota())
 
         finally:
             self.parent_span.set_attribute(SpanAttributes.OUTPUT_VALUE, "".join(self.buffer_container))
+            
+            if update_quota_after_final_response:
+                self.parent_span.set_attribute("metadata.user_quota_details.updated_after_final_response", True)
+            
             self.parent_span.set_status(Status(StatusCode.OK))
             self.parent_span.end()

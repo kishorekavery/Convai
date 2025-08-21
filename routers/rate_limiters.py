@@ -76,7 +76,9 @@ async def rate_limiter(request: ChatCompletionRequest, tracer, parent_span):
 
                 metadata_user_quota_details = {
                             "metadata.user_quota_details.quota" : user_quota,
-                            "metadata.user_quota_details.current_usage" : user_quota_used
+                            "metadata.user_quota_details.current_usage" : user_quota_used,
+                            "metadata.user_quota_details.updated_after_SQL": False,
+                            "metadata.user_quota_details.updated_after_final_response": False
                             }
                 
                 parent_span.set_attributes(metadata_user_quota_details)
