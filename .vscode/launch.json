@@ -1,0 +1,13 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run kbe_table_embedding_generation",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "dataprocessing.kbe_table_embedding_generation",
+      "justMyCode": true,
+      "python": "/Users/presanth/Code/-Working/convai-bedrock-arize-quota/.venv/bin/python3"
+    }
+  ]
+}
