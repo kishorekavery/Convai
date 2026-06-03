@@ -78,6 +78,7 @@ class ChatModel(BedrockClient):
 
 
 if __name__ == "__main__":
+<<<<<<< HEAD
 
     class MockSpan:
         """Minimal no-op span for local testing without a live OTel collector."""
@@ -87,11 +88,14 @@ if __name__ == "__main__":
         def record_exception(self, *args, **kwargs): pass
         def end(self, *args, **kwargs): pass
 
+=======
+>>>>>>> origin/main
     def run_test():
         Chat_model = ChatModel()
 
         prompt = """
                 <|begin_of_text|><|start_header_id|>system<|end_header_id|>
+<<<<<<< HEAD
                 You are a helpful AI assistant for Equipment Maintenance Expertise. Generate response with 10 words<|eot_id|><|start_header_id|>user<|end_header_id|>
                 What can you help me with?<|eot_id|><|start_header_id|>assistant<|end_header_id|>
                 """
@@ -101,4 +105,13 @@ if __name__ == "__main__":
 
         print()  # newline after stream ends
 
+=======
+                You are a helpful AI assistant for Equipment Maintenance Expertise. Generate resopnse with 10 words<|eot_id|><|start_header_id|>user<|end_header_id|>
+                What can you help me with?<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+                """
+
+        for text in Chat_model.generate_stream_response(prompt):
+            print(text, end="", flush=True)
+            
+>>>>>>> origin/main
     run_test()

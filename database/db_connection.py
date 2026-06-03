@@ -66,9 +66,18 @@ async def validate_database(database_name):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Database '{database_name}' does not exist.")
     
 
+<<<<<<< HEAD
 # if __name__ == "__main__":
 #     async def main():
 #         a = await validate_database(1)
 #         print(a)
 
 #     asyncio.run(main())
+=======
+if __name__ == "__main__":
+    async def main():
+        a = await validate_database(1)
+        print(a)
+
+    asyncio.run(main())
+>>>>>>> origin/main

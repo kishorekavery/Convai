@@ -10,8 +10,13 @@ DB_HOST = os.getenv("DB_HOST")
 DB_PORT = os.getenv("DB_PORT")
 DB_MIN_CONN=2
 DB_MAX_CONN=5
+<<<<<<< HEAD
 KNOWLEDGEBASE_DATABASE_NAME = "maintwiz"
 KNOWLEDGEBASE_SCHEMA_NAME = "ai"
+=======
+KNOWLEDGEBASE_DATABASE_NAME="maintwiz"
+KNOWLEDGEBASE_SCHEMA_NAME="ai"
+>>>>>>> origin/main
 
 DATA_SCHEMA="ai"
 USER_DETAILS_SCHEMA="public"
@@ -52,5 +57,9 @@ CLASSIFICATION_MODEL_TOP_P=0.9
 
 # LLM Tracing Tool
 COLLECTOR_PROJECT_NAME="async-mw-copilot-sql-bot-bedrock"
+<<<<<<< HEAD
 COLLECTOR_ENDPOINT="http://maintverse.com:6006/v1/traces"
 PHOENIX_API_KEY=os.getenv("PHOENIX_API_KEY")
+=======
+COLLECTOR_ENDPOINT="http://maintverse.com:6006/v1/traces"
+>>>>>>> origin/main

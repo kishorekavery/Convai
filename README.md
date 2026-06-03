@@ -22,6 +22,7 @@ docker run -d \
   -v phoenix_data:/mnt/data \
   arizephoenix/phoenix:version-11.23.1
 
+<<<<<<< HEAD
 ## Docker Run Command without auto-restart
   docker run \
   -p 6006:6006 \
@@ -72,6 +73,12 @@ nohup /home/ec2-user/ai/conv_ai/venv/bin/python3 -m uvicorn main:app --host 0.0.
 
 # CMD 1:
 sudo nano /etc/systemd/system/conv_ai.service
+=======
+## ------------------------------------------ SERVER SYSTEMCTL ---------------------------------------------------------------------- ##
+
+# CMD 1:
+sudo nano /etc/systemd/system/bedrock_conv_ai.service
+>>>>>>> origin/main
 
 # File Contents:
 [Unit]

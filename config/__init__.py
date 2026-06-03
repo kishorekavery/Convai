@@ -113,12 +113,19 @@ CLASSIFICATION_MODEL_CONFIG = {
 
 
 # ---------------- Tracing Config ----------------
+<<<<<<< HEAD
 from .settings import COLLECTOR_PROJECT_NAME, COLLECTOR_ENDPOINT, PHOENIX_API_KEY
+=======
+from .settings import COLLECTOR_PROJECT_NAME, COLLECTOR_ENDPOINT
+>>>>>>> origin/main
 
 TRACING_CONFIG = {
     "COLLECTOR_PROJECT_NAME": COLLECTOR_PROJECT_NAME,
     "COLLECTOR_ENDPOINT": COLLECTOR_ENDPOINT,
+<<<<<<< HEAD
     "PHOENIX_API_KEY": PHOENIX_API_KEY,
+=======
+>>>>>>> origin/main
 }
 
 

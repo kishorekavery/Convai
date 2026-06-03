@@ -4,6 +4,10 @@ from asyncpg import PostgresError, exceptions, ConnectionFailureError, Pool, Pos
 from typing import List
 from time import time
 from tabulate import tabulate
+<<<<<<< HEAD
+=======
+
+>>>>>>> origin/main
 ## Internal Packages
 from config import get_logger
 from config import KB_CONTEXT_LIMIT, DATA_SCHEMA, KNOWLEDGEBASE_DATABASE_NAME, KNOWLEDGEBASE_SCHEMA_NAME, USER_DETAILS_SCHEMA
@@ -18,28 +22,40 @@ SELECT uaq_user_id FROM public.user_ai_quota
 WHERE uaq_user_id = $1
 """
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> origin/main
 CHECK_IF_USER_QUOTA_LEFT = """
 SELECT uaq_used_count, uaq_quota_limit FROM public.user_ai_quota 
 WHERE uaq_user_id = $1
   AND uaq_used_count < uaq_quota_limit;
 """
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> origin/main
 UPDATE_USER_QUOTA_USAGE = """
 UPDATE public.user_ai_quota
 SET uaq_used_count = uaq_used_count + 1
 WHERE uaq_user_id = $1;
 """
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> origin/main
 def format_schema(records):
     lines = []
     for r in records:
         lines.append(f"- {r['column_name']}: {r['data_type'] }")
     return "\n".join(lines)
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> origin/main
 async def fetch_context(embedded_user_input: str, tableschema_dbconnection_pool: Pool) -> str:
     """
     Fetch context asynchronously from the database based on the embedded user input.
@@ -71,9 +87,15 @@ async def fetch_context(embedded_user_input: str, tableschema_dbconnection_pool:
     try:
         start_time = time()
         async with knowledgebase_dbconnection_pool.acquire() as conn:
+<<<<<<< HEAD
             # await conn.execute(f"SET search_path TO {KNOWLEDGEBASE_SCHEMA_NAME}")
             rows = await conn.fetch("""SELECT kbe_id, kbe_reference_tables, kbe_user_input, kbe_sql_query, kbe_user_response 
                                     FROM ai.knowledge_base_examples kbe
+=======
+            await conn.execute(f"SET search_path TO {KNOWLEDGEBASE_SCHEMA_NAME}")
+            rows = await conn.fetch("""SELECT kbe_id, kbe_reference_tables, kbe_user_input, kbe_sql_query, kbe_user_response 
+                                    FROM knowledge_base_examples kbe
+>>>>>>> origin/main
                                     ORDER BY kbe_user_input_embedding <=> $1
                                     LIMIT $2;
                                     """,embedded_user_input, KB_CONTEXT_LIMIT)
@@ -105,12 +127,21 @@ async def fetch_context(embedded_user_input: str, tableschema_dbconnection_pool:
         table_names = list(set().union(*temp_table_names))
 
         async with tableschema_dbconnection_pool.acquire() as conn:
+<<<<<<< HEAD
             # await conn.execute(f"SET search_path TO {DATA_SCHEMA}")
             for table_name in table_names:
                 schema = await conn.fetch("""SELECT column_name, data_type
                                         FROM information_schema.columns
                                         WHERE table_name = $1 and table_schema = $2;
                                         """, table_name, DATA_SCHEMA)
+=======
+            await conn.execute(f"SET search_path TO {DATA_SCHEMA}")
+            for table_name in table_names:
+                schema = await conn.fetch("""SELECT column_name, data_type
+                                        FROM information_schema.columns
+                                        WHERE table_name = $1;
+                                        """, table_name)
+>>>>>>> origin/main
                 
                 # table = tabulate(schema, headers="keys", tablefmt="github")
                 
@@ -136,6 +167,7 @@ async def fetch_context(embedded_user_input: str, tableschema_dbconnection_pool:
         logging.error("An unexpected error occurred in fetch_context: %s", e, exc_info=True)
         raise RuntimeError(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred while fetching context.")
 
+<<<<<<< HEAD
 
 def format_sql_query(sql, facm_code):
     """
@@ -150,6 +182,13 @@ def format_sql_query(sql, facm_code):
 
     return sql_with_facility_code
 
+=======
+def clean_sql_query(sql):
+    """
+    Remove triple backticks and optional 'sql' label from the query string.
+    """
+    return re.sub(r"^```(sql)?\s*|```$", "", sql.strip(), flags=re.IGNORECASE)
+>>>>>>> origin/main
 
 async def execute_ai_generated_sql(sql: str, pool: Pool):
     """
@@ -187,7 +226,10 @@ async def execute_ai_generated_sql(sql: str, pool: Pool):
         logging.error("An error occured when executing the AI Generated SQL", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error executing the SQL")
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> origin/main
 async def fetch_user_details (user_id: str, pool: Pool):
 
     try:
