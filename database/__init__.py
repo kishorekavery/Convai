@@ -8,10 +8,7 @@ from .db_queries import CHECK_IF_USER_QUOTA_LEFT as CHECK_IF_USER_QUOTA_LEFT
 from .db_queries import UPDATE_USER_QUOTA_USAGE as UPDATE_USER_QUOTA_USAGE
 from .db_queries import format_schema as format_schema
 from .db_queries import fetch_context as fetch_context
-<<<<<<< HEAD
 from .db_queries import format_sql_query as format_sql_query
-=======
 from .db_queries import clean_sql_query as clean_sql_query
->>>>>>> origin/main
 from .db_queries import execute_ai_generated_sql as execute_ai_generated_sql
 from .db_queries import fetch_user_details as fetch_user_details

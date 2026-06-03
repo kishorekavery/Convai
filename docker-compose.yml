@@ -1,0 +1,13 @@
+services:
+  convai-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: convai-service
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - ./logs:/app/logs
+    restart: always

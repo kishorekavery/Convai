@@ -1,0 +1,23 @@
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Local environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDE files
+.vscode/
+.idea/
+.DS_Store
+
+# Local configs and logs
+.env
+logs/
+*.log
+
+# Git
+.git/
+.gitignore

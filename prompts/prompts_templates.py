@@ -1,11 +1,7 @@
 # LLM prompts
 from datetime import date
 
-<<<<<<< HEAD
-def format_sql_prompt(user_input: str = '', user_details : str = '', table_schema:str = '', context_for_sql_generation: str  = '', chat_history:str = '') -> str:
-=======
 def format_sql_prompt(user_input: str = '', user_details : str = '', facm_code = '', table_schema:str = '', context_for_sql_generation: str  = '', chat_history:str = '') -> str:
->>>>>>> origin/main
     '''
     Returns the formatted prompt as a string.
     Input:
@@ -27,23 +23,15 @@ You are an AI assistant specialized in generating PostgreSQL queries based stric
 3. Respond with **only** the SQL query—no explanations or extra text.
 4. If the user requests a DDL, DML, DCL, or TCL query, respond with: SELECT 'User request cannot be fulfilled.';
 5. Ensure the query adheres to PostgreSQL syntax.
-<<<<<<< HEAD
 6. Always include the <facilitycode> placeholder in the query with include statement (IN) and never '='.
-=======
-6. Always include the facilities in the ##User Facility## as the facility code in the query with IN not =.
->>>>>>> origin/main
 7. Always include a LIMIT clause to return only 100 rows of data.
 8. Always specify the columns in the SELECT statement. Do not use * to select all columns.
 9. If users asks for data related to him/her, use the user details provided in ##User Details## to filter the data.
 
 ##Todays Date : {date.today()}##
 
-<<<<<<< HEAD
 ##User Query Terminologies - DONOT USE THE SHORT ACRONYMS IN SQL. ALWAYS USE THE FULL TEXT##
 Short Form | Full Text (to use in SQL)
-=======
-##Terminologies##
->>>>>>> origin/main
 - wo: work order
 - pm: preventive maintenance
 - bd: breakdown
@@ -62,12 +50,8 @@ Short Form | Full Text (to use in SQL)
 ##User Details##
 {user_details}
 
-<<<<<<< HEAD
-=======
 ##User Facility##
 {facm_code}
-
->>>>>>> origin/main
 ##chat_history:##
 {chat_history}
 
@@ -282,11 +266,7 @@ User: "Can you tell me a joke?"
 ##Chat History##
 {chat_history}
 
-<<<<<<< HEAD
 Now classify the user input below keeping the context from the past user queries(provided in the descending order):<|eot_id|>
-=======
-Now classify only the latest user input below:<|eot_id|>
->>>>>>> origin/main
 <|start_header_id|>user<|end_header_id|>{user_input}<|eot_id|>
 <|start_header_id|>assistant<|end_header_id|>
 """
