@@ -1,16 +1,15 @@
-from fastapi import status, HTTPException
-import time
 import json
-from models.classification_model import ClassificationModel
-from prompts.prompts_templates import format_classification_prompt
+
 ## Internal Packages
-from config.logger_config import get_logger
+from models import ClassificationModel
+from prompts import format_classification_prompt
+from config import get_logger
 
 
 ## Initiate Logger
 logging = get_logger(__name__)
 
-def intent_classification(user_input, chat_history, span):
+def intent_classification(user_input, chat_history, CLASSIFICATION_MODEL_ID, span):
     '''Classify the user input to determine the intent and return the action to be taken.
     Args:
         start_time (float): The time when the request was received.
@@ -27,6 +26,13 @@ def intent_classification(user_input, chat_history, span):
 
         ## Prompt = Instructions + table schema + example + user_input 
         classification_prompt = format_classification_prompt(user_input, chat_history)
+        
+        span.set_attributes({
+            "llm.system": "bedrock",
+            "llm.model_name": str(CLASSIFICATION_MODEL_ID),
+            "llm.input_messages.0.message.role": "system",
+            "llm.input_messages.0.message.content":  str(classification_prompt),
+        })
         
         intent_output = intent_classification_model.generate_classification(classification_prompt)
         # print("Intent Classification Result:", intent_output)
@@ -57,11 +63,6 @@ def intent_classification(user_input, chat_history, span):
             raise ValueError(f"Unexpected type: {classification_type}")
         
         logging.info(f"Classification result: {classification_type}, Message: {message}, Action: {action}")
-
-        span.set_attributes({
-            "llm.input_messages.0.message.role": "system",
-            "llm.input_messages.0.message.content":  str(classification_prompt),
-        })
         
         return {
             "type": classification_type,

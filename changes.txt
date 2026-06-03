@@ -1,0 +1,8 @@
+db_queries.py - added "public." schema line: 75 to 79
+
+llm_inference.py - Rate Limiting Disabled [RATE-LIMIT-DISABLED] - 2026-05-29
+  - line 15  : commented out import → # from routers import user_quota_limiter
+  - line 57  : commented out user_quota_limiter() call in _dep() function
+  - line 58  : added bypass — builds pool, ctx, parent_span directly without quota check
+  - line 239 : commented out UPDATE_USER_QUOTA_USAGE execution block (quota no longer incremented after SQL)
+  NOTE: Search tag [RATE-LIMIT-DISABLED] in llm_inference.py to re-enable

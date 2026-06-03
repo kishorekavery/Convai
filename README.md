@@ -1,5 +1,9 @@
 ## Project Commands ##
 
+Install vector extension in the schema where vector similarity search will be done
+
+Ex: schema - ai
+
 # ---- LLM Observability Tool ------------------------------------------------------------------------------------------------------ #
 
 ## Dependencies
@@ -71,25 +75,19 @@ sudo nano /etc/systemd/system/conv_ai.service
 
 # File Contents:
 [Unit]
-Description=Conv AI FastAPI Service
+Description=SQL Conv AI Bedrock WebService
 After=network.target
 
 [Service]
 Type=simple
 User=ec2-user
-WorkingDirectory=/home/ec2-user/ai/conv_ai
-ExecStart=/home/ec2-user/ai/conv_ai/venv/bin/python3 -m uvicorn main:app --host 0.0.0.0 --port 8000
-Restart=always
+WorkingDirectory=/home/ec2-user/ai/async_conv_ai
+ExecStart=/home/ec2-user/ai/async_conv_ai/.venv/bin/python3 -m uvicorn main:app \
+    --host 0.0.0.0 \
+    --port 8000
+Restart=yes
+RestartSec=5
+Environment=PATH=/home/ec2-user/ai/async_conv_ai/.venv/bin:/usr/bin:/bin
 
 [Install]
 WantedBy=multi-user.target
-
-# CMD 2:
-sudo systemctl daemon-reload
-
-# CMD 3:
-sudo systemctl start conv_ai.service
-sudo systemctl restart conv_ai.service
-
-# CMD 4:
-sudo systemctl status conv_ai.service

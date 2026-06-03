@@ -1,7 +1,9 @@
-from config.logger_config import get_logger
-from config.settings import CLASSIFICATION_MODEL_ID, CLASSIFICATION_MODEL_CONTENT_TYPE, CLASSIFICATION_MODEL_ACCEPT, CLASSIFICATION_MODEL_MAX_GEN_LENGTH, CLASSIFICATION_MODEL_TEMPERATURE, CLASSIFICATION_MODEL_TOP_P
-from models.bedrock_client import BedrockClient
 from time import time
+
+from config import get_logger
+from config import CLASSIFICATION_MODEL_ID, CLASSIFICATION_MODEL_CONTENT_TYPE, CLASSIFICATION_MODEL_ACCEPT, CLASSIFICATION_MODEL_MAX_GEN_LENGTH, CLASSIFICATION_MODEL_TEMPERATURE, CLASSIFICATION_MODEL_TOP_P
+from models import BedrockClient
+
 
 logging = get_logger(__name__)
 
@@ -46,9 +48,8 @@ if __name__ == "__main__":
         classification_model = ClassificationModel()
 
         prompt = """
-                <|begin_of_text|><|start_header_id|>system<|end_header_id|>
-                You are a helpful AI assistant for Equipment Maintenance Expertise. Generate resopnse with 10 words<|eot_id|><|start_header_id|>user<|end_header_id|>
-                What can you help me with?<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+                You are a helpful AI assistant for Equipment Maintenance Expertise. Generate response with 10 words
+                What can you help me with?
                 """
 
         for text in classification_model.generate_classification(prompt):

@@ -1,9 +1,12 @@
-from database.db_connection import connect_to_db
-from models.embedding_model import TitanEmbeddingModel
-from config.logger_config import get_logger
-from config.settings import KNOWLEDGEBASE_DATABASE_NAME, KNOWLEDGEBASE_SCHEMA_NAME
 
 import asyncio
+
+from config import get_logger
+from config import KNOWLEDGEBASE_DATABASE_NAME, KNOWLEDGEBASE_SCHEMA_NAME
+
+from database import connect_to_db
+from models import TitanEmbeddingModel
+
 
 logging = get_logger(__name__)
 

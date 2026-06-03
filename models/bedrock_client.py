@@ -1,13 +1,15 @@
-from config.logger_config import get_logger
-from config.settings import AWS_REGION, AWS_ACCESS_KEY, AWS_SECRET_KEY
 import json
 import boto3
 from botocore.exceptions import BotoCoreError, NoCredentialsError, EndpointConnectionError
 from fastapi import HTTPException, status
 from time import time
 
+from config import get_logger
+from config import AWS_REGION, AWS_ACCESS_KEY, AWS_SECRET_KEY
+
 # Load logger
 logging = get_logger(__name__)
+
 
 class BedrockClient:
     def __init__(self, model_id: str, contentType: str, accept: str):

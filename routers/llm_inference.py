@@ -1,55 +1,102 @@
 from fastapi import HTTPException, status, APIRouter, Depends
-from fastapi.responses import Response
+from fastapi import Response
 import time
 from tabulate import tabulate
 import asyncio
 import functools
 import threading
-
-## Internal Packages
-from config.logger_config import get_logger
-from config.settings import EMBEDDING_MODEL_ID, CHAT_MODEL_ID, CLASSIFICATION_MODEL_ID, COLLECTOR_ENDPOINT, COLLECTOR_PROJECT_NAME
-from models.data_models import ChatCompletionRequest
-from dataprocessing.user_query_processing import process_user_query
-from database.db_queries import fetch_context, fetch_user_details
-from database.db_queries import UPDATE_USER_QUOTA_USAGE
-from prompts.prompts_templates import format_sql_prompt, format_response_to_user_prompt
-from responses.streaming_response import CustomStreamingResponse as StreamingResponse
-## Initiate the models
-from models.embedding_model import TitanEmbeddingModel
-from models.text_generation_model import LlamaModel
-from agents.sql_agent import sql_agent
-from agents.intent_classification_agent import intent_classification
-from routers.rate_limiters import rate_limiter
 ## Tracing
+import contextvars
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind, Status, StatusCode
+from opentelemetry.sdk.trace import SpanProcessor
+from opentelemetry.sdk.resources import Resource
+from openinference.semconv.resource import ResourceAttributes
 from openinference.instrumentation.bedrock import BedrockInstrumentor
 from openinference.semconv.trace import SpanAttributes, OpenInferenceSpanKindValues
 from phoenix.otel import register
+## Internal Packages
+# from routers import user_quota_limiter
+
+from config import get_logger
+from config import EMBEDDING_MODEL_ID, CHAT_MODEL_ID, CLASSIFICATION_MODEL_ID
+from config import COLLECTOR_ENDPOINT, COLLECTOR_PROJECT_NAME, PHOENIX_API_KEY
+
+from database import fetch_context, fetch_user_details
+from database import UPDATE_USER_QUOTA_USAGE
+
+from dataprocessing import get_last_and_current_user_query, get_last_n_user_queries
+
+from models import ChatCompletionRequest
+
+from prompts import format_sql_prompt, format_response_to_user_prompt
+## Initiate the models
+from models import TitanEmbeddingModel
+from models import ChatModel
+from agents import sql_agent
+from agents import intent_classification
+# Custom Implementation of Starlette StreamingResponse Class
+from responses import StreamingResponse
+
 
 ## Initiate Logger
 logging = get_logger(__name__)
-
 ## ---- Arize Phoenix Tracer Setup  ------------------------------------------------------------------------------------------------------- #
 
-# 1. Set tracer provider with service name
-tracer_provider = register(project_name=COLLECTOR_PROJECT_NAME, batch=True, endpoint=COLLECTOR_ENDPOINT)
+# Single global tracer provider — BedrockInstrumentor is a global monkey-patch and must only be called once
+tracer_provider = register(
+    project_name=COLLECTOR_PROJECT_NAME,
+    batch=True,
+    endpoint=COLLECTOR_ENDPOINT,
+    headers={"Authorization": f"Bearer {PHOENIX_API_KEY}"} if PHOENIX_API_KEY else {}
+)
 
-# 2. Auto-instrument OpenAI SDK
+# ContextVar to propagate the current database/project name across the request lifecycle
+current_db_var = contextvars.ContextVar("current_db_var", default=None)
+
+class DynamicProjectProcessor(SpanProcessor):
+    """
+    OTel SpanProcessor that dynamically intercepts ending spans and overrides their
+    resource attributes to route them to the current client's Phoenix project.
+    """
+    def on_start(self, span, parent_context=None):
+        pass
+
+    def on_end(self, span):
+        db_name = current_db_var.get()
+        if db_name:
+            # Overwrite the project.name resource attribute dynamically
+            dynamic_resource = Resource.create({ResourceAttributes.PROJECT_NAME: db_name})
+            span._resource = span.resource.merge(dynamic_resource)
+
+# Register the dynamic project name mutator processor
+tracer_provider.add_span_processor(DynamicProjectProcessor())
+
+# Instrument Bedrock SDK once globally
 BedrockInstrumentor().instrument(tracer_provider=tracer_provider)
 
-# 3. Get tracer for manual spans
+# Global tracer for manual spans
 tracer = tracer_provider.get_tracer(__name__)
 
 
 async def _dep(request: ChatCompletionRequest):  # FastAPI will inject request here
     global tracer
 
+    # Set the dynamic project name for all traces/spans created during this request task
+    current_db_var.set(request.database_name)
+
     parent_span = tracer.start_span("chat_chain", kind=SpanKind.SERVER)
     parent_span.set_attribute(SpanAttributes.OPENINFERENCE_SPAN_KIND, OpenInferenceSpanKindValues.CHAIN.value)
+    # Route this trace into the client's own Phoenix project by database name
+    parent_span.set_attribute("openinference.project.name", request.database_name)
 
-    return await rate_limiter(request, tracer, parent_span)
+    # [RATE-LIMIT-DISABLED] Rate limiter bypassed — re-enable by restoring the line below:
+    # return await user_quota_limiter(request, tracer, parent_span)
+
+    from opentelemetry.trace import set_span_in_context
+    ctx = set_span_in_context(parent_span)
+    pool = await __import__('database').connect_to_db(request.database_name)
+    return {"pool": pool, "request": request, "ctx": ctx, "parent_span": parent_span, "tracer": tracer}
 
 
 ## Define the router config
@@ -60,11 +107,14 @@ router = APIRouter(
 
 @router.post("/chat-completion")
 async def chat_completion(
-    request_data= Depends(_dep)
+        request_data= Depends(_dep)
     ):
 
     try:
-        global tracer 
+    ## --------------------------------------------------------------------------------------------------- #
+    ##    Intialization
+    ## --------------------------------------------------------------------------------------------------- #
+        global tracer
 
         loop = asyncio.get_running_loop()
 
@@ -73,6 +123,7 @@ async def chat_completion(
 
         pool = request_data['pool']
         request = request_data['request']
+
         ctx = request_data['ctx']
         parent_span = request_data['parent_span']
         
@@ -82,14 +133,25 @@ async def chat_completion(
         database_name = request.database_name
         user_id = request.user_id
         facm_code = request.facm_code
-        # print('start')
+        
         logging.info("Client Domain: %s", database_name)
         logging.info("Client User Id: %s", user_id)
         logging.info("Raw User Input: %s", raw_user_input)
 
-        ## Process the user input to combine it with chat history
-        processed_user_input = process_user_query(chat_history, raw_user_input)
+    ## --------------------------------------------------------------------------------------------------- #
+    ##    User Input Processing
+    ## --------------------------------------------------------------------------------------------------- #
+
+        # Process the user input to combine it with last user query from the chat history
+        processed_user_input = get_last_and_current_user_query(chat_history, raw_user_input)
+        
+        last_n_user_queries = f"Last User Queries: {get_last_n_user_queries(chat_history)}"
+        
         logging.info("Processed User Input: %s", processed_user_input)
+
+    ## --------------------------------------------------------------------------------------------------- #
+    ##    Intent Classification
+    ## --------------------------------------------------------------------------------------------------- #
 
         with tracer.start_as_current_span("1. intent_classification", context=ctx, kind=SpanKind.CLIENT) as span1:
 
@@ -98,21 +160,18 @@ async def chat_completion(
                 "info": "Classify the user input to determine the intent and return the action to be taken",
                 })
             
-            # intent = intent_classification(processed_user_input, chat_history, span=span1)
-            def _intent_classification(processed_user_input, chat_history, span):
+            # intent = intent_classification(raw_user_input, last_n_user_queries, CLASSIFICATION_MODEL_ID, span=span1)
+            def _intent_classification(raw_user_input, last_n_user_queries, CLASSIFICATION_MODEL_ID, span):
                 with trace.use_span(span):
-                    return intent_classification(processed_user_input, chat_history, span)
+                    return intent_classification(raw_user_input, last_n_user_queries, CLASSIFICATION_MODEL_ID, span)
                 
-            intent_results = await asyncio.gather(loop.run_in_executor(None, 
-                                    functools.partial(_intent_classification, processed_user_input, chat_history, span=span1))
+            intent_results = await asyncio.gather(loop.run_in_executor(None,
+                                    functools.partial(_intent_classification, raw_user_input, last_n_user_queries, CLASSIFICATION_MODEL_ID, span=span1))
                                 )
             
-            # print('intent')
             intent = intent_results[0]
 
             span1.set_attributes({
-                "llm.system": "bedrock",
-                "llm.model_name": str(CLASSIFICATION_MODEL_ID),
                 "llm.output_messages.0.message.role": "assistant",
                 "llm.output_messages.0.message.content":  str(intent),
             })
@@ -150,14 +209,21 @@ async def chat_completion(
         logging.info("Proceeding with SQL model call.")
 
         embedding_model = TitanEmbeddingModel()
-        text_generation_model = LlamaModel()
-        # print('models')
+        text_generation_model = ChatModel()
     
-    ## ---- Generate Vector of the user input -------------------------------------------------------------------------------------- #
+    ## --------------------------------------------------------------------------------------------------- #
+    ##    Generate Vector of the user input
+    ## --------------------------------------------------------------------------------------------------- #
+
         with tracer.start_as_current_span("2. embedding_generation", context=ctx, kind=SpanKind.CLIENT) as span2:
             span2.set_attributes({
                 SpanAttributes.OPENINFERENCE_SPAN_KIND: OpenInferenceSpanKindValues.EMBEDDING.value,
                 "info": "Generates embedding of the processed user query",
+            })
+
+            span2.set_attributes({
+                "llm.system": "bedrock",
+                "llm.model_name": str(EMBEDDING_MODEL_ID),
             })
             
             # embedded_user_input = embedding_model.generate_embedding(processed_user_input, span=span2)
@@ -173,15 +239,15 @@ async def chat_completion(
             embedded_user_input = embedding_result[0]
 
             span2.set_attributes({
-                "llm.system": "bedrock",
-                "llm.model_name": str(EMBEDDING_MODEL_ID),
                 "llm.output_messages.0.message.role": "assistant",
                 "llm.output_messages.0.message.content":  str(embedded_user_input),
             })
 
             span2.set_status(Status(StatusCode.OK))
-            
-    ## ---- Generate SQL for the user input -------------------------------------------------------------------------------------- #
+    
+    ## --------------------------------------------------------------------------------------------------- #
+    ##    Generate SQL for the user input
+    ## --------------------------------------------------------------------------------------------------- #
 
         ## Retrieve Context for the user input
         table_schema, context_for_sql_generation, context_for_user_response = await fetch_context(str(embedded_user_input), tableschema_dbconnection_pool=pool)
@@ -199,19 +265,9 @@ async def chat_completion(
             })
 
             ## Prompt = Instructions + table schema + example + user_input
-            sql_generation_prompt = format_sql_prompt(raw_user_input, user_details, facm_code , table_schema, context_for_sql_generation, chat_history)
-
-            table_rows, sql = await sql_agent(start_time, sql_generation_prompt, pool, text_generation_model, span3, loop, trace)
+            sql_generation_prompt = format_sql_prompt(raw_user_input, user_details, table_schema, context_for_sql_generation, 
+                                                      chat_history=last_n_user_queries)
             
-            ## user quota reduction after successful SQL Generation
-            async with pool.acquire() as conn:
-                await conn.execute(UPDATE_USER_QUOTA_USAGE, int(user_id))
-
-                logging.info("User Quota Updated after SQL generation")
-                parent_span.set_attributes({
-                    "metadata.user_quota_details.updated_after_SQL": True
-                })
-
             span3.set_attributes({
                 "llm.system": "bedrock",
                 "llm.model_name": str(CHAT_MODEL_ID),
@@ -219,21 +275,53 @@ async def chat_completion(
                 "llm.input_messages.0.message.content":  str(sql_generation_prompt)
             })
 
+            table_rows = await sql_agent(start_time, sql_generation_prompt, pool, text_generation_model, span3, loop, trace, facm_code)
+            
+            # [RATE-LIMIT-DISABLED] Quota deduction skipped — re-enable by uncommenting the block below:
+            # async with pool.acquire() as conn:
+            #     await conn.execute(UPDATE_USER_QUOTA_USAGE, int(user_id))
+            #     logging.info("User Quota Updated after SQL generation")
+            #     parent_span.set_attributes({
+            #         "metadata.user_quota_details.updated_after_SQL": True
+            #     })
+            
             span3.set_status(Status(StatusCode.OK))
 
-        num_rows = len(table_rows)
-        num_cols = len(table_rows[0]) if num_rows > 0 else 0
+            num_rows = len(table_rows)
+            num_cols = len(table_rows[0]) if num_rows > 0 else 0
 
-        ## Log the fetched result details
-        logging.info("Fetched result from %s database - Number of rows: %s", database_name, num_rows)
-        logging.info("Fetched result from %s database - Number of columns: %s", database_name, num_cols)
+            ## Log the fetched result details
+            logging.info("Fetched result from %s database - Number of rows: %s", database_name, num_rows)
+            logging.info("Fetched result from %s database - Number of columns: %s", database_name, num_cols)
+
+            span3.set_attributes({
+                    "sql.row_count": num_rows,
+                    "sql.columns_count": num_cols,
+                })
+            
+            # Return if large data > 500 values is passed
+            if num_cols * num_rows > 500:
+                large_volume_response = "The data set for your request is too large to process in one go. Please refine your query (e.g., by selecting a specific facility, time range, equipment, or limiting the record count)."
+                logging.info("Context length exceeded. Return Response: %s", large_volume_response)
+                process_time = time.time() - start_time
+                parent_span.set_attribute(SpanAttributes.OUTPUT_VALUE, large_volume_response)
+                parent_span.set_status(Status(StatusCode.OK))
+                parent_span.end()
+                return Response(
+                    status_code=status.HTTP_200_OK,
+                    content=large_volume_response,
+                    headers={"X-Response-Time": f"{process_time:.6f} seconds"},
+                    media_type="text/plain"
+                )
 
         if table_rows:
             ## Convert each asyncpg Record to a dictionary
             data = [dict(row) for row in table_rows]
-            table_rows = tabulate(data, headers="keys", tablefmt="grid")
+            table_rows = tabulate(data, headers="keys", tablefmt="simple")
     
-    ## ---- Generate Final Response for the user input -------------------------------------------------------------------------------------- #        
+    ## --------------------------------------------------------------------------------------------------- #
+    ##    Generate Final Response for the user input
+    ## --------------------------------------------------------------------------------------------------- #
 
         async def traced_stream(ctx, buffer_container):
             with tracer.start_as_current_span("4. final_response", context=ctx, kind=SpanKind.CLIENT) as span4:
@@ -243,8 +331,16 @@ async def chat_completion(
                 })
                 
                 try:
-                    response_to_user_prompt = format_response_to_user_prompt(raw_user_input, context_for_user_response, table_rows, chat_history)
-                    
+                    response_to_user_prompt = format_response_to_user_prompt(raw_user_input, context_for_user_response, table_rows, 
+                                                                             chat_history=last_n_user_queries)
+
+                    span4.set_attributes({
+                        "llm.system": "bedrock",
+                        "llm.model_name": str(CHAT_MODEL_ID),
+                        "llm.input_messages.0.message.role": "system",
+                        "llm.input_messages.0.message.content":  str(response_to_user_prompt),
+                    })
+
                     queue = asyncio.Queue()
 
                     # Background worker (runs in thread)
@@ -267,11 +363,8 @@ async def chat_completion(
                         yield chunk
                     
                     buffer = "".join(buffer_container)
+                    
                     span4.set_attributes({
-                        "llm.system": "bedrock",
-                        "llm.model_name": str(CHAT_MODEL_ID),
-                        "llm.input_messages.0.message.role": "system",
-                        "llm.input_messages.0.message.content":  str(response_to_user_prompt),
                         "llm.output_messages.0.message.role": "assistant",
                         "llm.output_messages.0.message.content":  str(buffer),
                     })

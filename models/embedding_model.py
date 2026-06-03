@@ -1,6 +1,8 @@
-from config.logger_config import get_logger
-from config.settings import EMBEDDING_MODEL_ACCEPT, EMBEDDING_MODEL_CONTENT_TYPE, EMBEDDING_MODEL_DIMENSIONS, EMBEDDING_MODEL_ID, EMBEDDING_MODEL_NORMALIZATION
-from models.bedrock_client import BedrockClient, json
+import json
+
+from config import get_logger
+from config import EMBEDDING_MODEL_ACCEPT, EMBEDDING_MODEL_CONTENT_TYPE, EMBEDDING_MODEL_DIMENSIONS, EMBEDDING_MODEL_ID, EMBEDDING_MODEL_NORMALIZATION
+from models import BedrockClient
 
 logging = get_logger(__name__)
 

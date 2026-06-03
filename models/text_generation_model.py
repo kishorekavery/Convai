@@ -1,12 +1,13 @@
-from config.logger_config import get_logger
-from config.settings import CHAT_MODEL_ID, CHAT_MODEL_CONTENT_TYPE, CHAT_MODEL_ACCEPT, CHAT_MODEL_MAX_GEN_LENGTH, CHAT_MODEL_TEMPERATURE, CHAT_MODEL_TOP_P
-from models.bedrock_client import BedrockClient
 from tabulate import tabulate
 from time import time
 
+from config import get_logger
+from config import CHAT_MODEL_ID, CHAT_MODEL_CONTENT_TYPE, CHAT_MODEL_ACCEPT, CHAT_MODEL_MAX_GEN_LENGTH, CHAT_MODEL_TEMPERATURE, CHAT_MODEL_TOP_P
+from models import BedrockClient
+
 logging = get_logger(__name__)
 
-class LlamaModel(BedrockClient):
+class ChatModel(BedrockClient):
     def __init__(self):
         super().__init__(model_id=CHAT_MODEL_ID, contentType=CHAT_MODEL_CONTENT_TYPE, accept=CHAT_MODEL_ACCEPT)
     
@@ -77,16 +78,27 @@ class LlamaModel(BedrockClient):
 
 
 if __name__ == "__main__":
+
+    class MockSpan:
+        """Minimal no-op span for local testing without a live OTel collector."""
+        def set_attributes(self, *args, **kwargs): pass
+        def set_attribute(self, *args, **kwargs): pass
+        def set_status(self, *args, **kwargs): pass
+        def record_exception(self, *args, **kwargs): pass
+        def end(self, *args, **kwargs): pass
+
     def run_test():
-        Chat_model = LlamaModel()
+        Chat_model = ChatModel()
 
         prompt = """
                 <|begin_of_text|><|start_header_id|>system<|end_header_id|>
-                You are a helpful AI assistant for Equipment Maintenance Expertise. Generate resopnse with 10 words<|eot_id|><|start_header_id|>user<|end_header_id|>
+                You are a helpful AI assistant for Equipment Maintenance Expertise. Generate response with 10 words<|eot_id|><|start_header_id|>user<|end_header_id|>
                 What can you help me with?<|eot_id|><|start_header_id|>assistant<|end_header_id|>
                 """
 
-        for text in Chat_model.generate_stream_response(prompt):
+        for text in Chat_model.generate_stream_response(prompt, span=MockSpan()):
             print(text, end="", flush=True)
-            
+
+        print()  # newline after stream ends
+
     run_test()

@@ -1,10 +1,10 @@
+from fastapi import HTTPException, status
 from asyncpg import Pool, create_pool, PostgresError
 import asyncio
 
 ## Internal Packages
-from config.settings import DB_HOST, DB_PORT, DB_USERNAME, DB_PASSWORD, DB_MIN_CONN, DB_MAX_CONN
-from config.logger_config import get_logger
-from fastapi import HTTPException, status
+from config import get_logger
+from config import DB_HOST, DB_PORT, DB_USERNAME, DB_PASSWORD, DB_MIN_CONN, DB_MAX_CONN
 
 logging = get_logger(__name__)
 
@@ -66,9 +66,9 @@ async def validate_database(database_name):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Database '{database_name}' does not exist.")
     
 
-if __name__ == "__main__":
-    async def main():
-        a = await validate_database(1)
-        print(a)
+# if __name__ == "__main__":
+#     async def main():
+#         a = await validate_database(1)
+#         print(a)
 
-    asyncio.run(main())
+#     asyncio.run(main())
