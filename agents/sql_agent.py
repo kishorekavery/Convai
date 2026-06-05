@@ -19,7 +19,10 @@ async def sql_agent(start_time, sql_generation_prompt, client_dbconnection_pool,
         with trace.use_span(span):
             return text_generation_model.generate_response(sql_generation_prompt)
 
+    import contextvars
+    ctx_copied = contextvars.copy_context()
     sql_result = await asyncio.gather(event_loop.run_in_executor(None, 
+                        ctx_copied.run,
                         functools.partial(_sql_generation, sql_generation_prompt, span)
                         ))
     

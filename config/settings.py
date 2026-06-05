@@ -51,6 +51,8 @@ CLASSIFICATION_MODEL_TOP_P=0.9
 
 
 # LLM Tracing Tool
-COLLECTOR_PROJECT_NAME="async-mw-copilot-sql-bot-bedrock"
-COLLECTOR_ENDPOINT="http://maintverse.com:6006/v1/traces"
+COLLECTOR_PROJECT_NAME=os.getenv("COLLECTOR_PROJECT_NAME", "async-mw-copilot-sql-bot-bedrock")
+COLLECTOR_ENDPOINT=os.getenv("COLLECTOR_ENDPOINT", "http://maintverse.com:6006/v1/traces")
 PHOENIX_API_KEY=os.getenv("PHOENIX_API_KEY")
+PHOENIX_BATCH=os.getenv("PHOENIX_BATCH", "True").lower() == "true"
+PHOENIX_DEBUG=os.getenv("PHOENIX_DEBUG", "False").lower() == "true"

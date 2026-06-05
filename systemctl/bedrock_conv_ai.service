@@ -1,17 +1,16 @@
 [Unit]
-Description=SQL Conv AI Bedrock WebService
-After=network.target
+Description=SQL Conv AI Bedrock WebService (Docker Compose)
+After=network.target docker.service
+Requires=docker.service
 
 [Service]
 Type=simple
 User=ec2-user
-WorkingDirectory=/home/ec2-user/ai/async_conv_ai
-ExecStart=/home/ec2-user/ai/async_conv_ai/.venv/bin/python3 -m uvicorn main:app \
-    --host 0.0.0.0 \
-    --port 8000
-Restart=yes
+WorkingDirectory=/home/ec2-user/ai/async-convai-bedrock-arize-quota
+ExecStart=/usr/bin/docker compose up
+ExecStop=/usr/bin/docker compose down
+Restart=always
 RestartSec=5
-Environment=PATH=/home/ec2-user/ai/async_conv_ai/.venv/bin:/usr/bin:/bin
 
 [Install]
 WantedBy=multi-user.target

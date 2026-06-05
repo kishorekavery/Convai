@@ -21,7 +21,7 @@ WHERE uaq_user_id = $1
 
 
 CHECK_IF_USER_QUOTA_LEFT = """
-SELECT uaq_used_count, uaq_quota_limit FROM public.user_ai_quota 
+SELECT * FROM public.user_ai_quota 
 WHERE uaq_user_id = $1
   AND uaq_used_count < uaq_quota_limit;
 """
@@ -29,7 +29,7 @@ WHERE uaq_user_id = $1
 
 UPDATE_USER_QUOTA_USAGE = """
 UPDATE public.user_ai_quota
-SET uaq_used_count = uaq_used_count + 1
+SET uaq_used_count = uaq_used_count + $2
 WHERE uaq_user_id = $1;
 """
 

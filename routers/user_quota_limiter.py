@@ -76,12 +76,18 @@ async def user_quota_limiter(request: ChatCompletionRequest, tracer, parent_span
                 user_quota = row['uaq_quota_limit']
                 user_quota_used = row['uaq_used_count']
 
+                dict_row = dict(row)
+                username = dict_row.get('uaq_username')
+
                 metadata_user_quota_details = {
                             "metadata.user_quota_details.quota" : user_quota,
                             "metadata.user_quota_details.current_usage" : user_quota_used,
                             "metadata.user_quota_details.updated_after_SQL": False,
                             "metadata.user_quota_details.updated_after_final_response": False
                             }
+                if username:
+                    metadata_user_quota_details["metadata.user_quota_details.username"] = username
+                    logging.info(f"Quota exists for user: {user_id} ({username})")
                 
                 parent_span.set_attributes(metadata_user_quota_details)
 

@@ -34,7 +34,7 @@ def intent_classification(user_input, chat_history, CLASSIFICATION_MODEL_ID, spa
             "llm.input_messages.0.message.content":  str(classification_prompt),
         })
         
-        intent_output = intent_classification_model.generate_classification(classification_prompt)
+        intent_output = intent_classification_model.generate_classification(classification_prompt, span=span)
         # print("Intent Classification Result:", intent_output)
         
         if not intent_output or not intent_output.strip():

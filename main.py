@@ -4,9 +4,23 @@ from routers import llm_inference
 
 from fastapi import FastAPI
 
+from contextlib import asynccontextmanager
+
 logging = get_logger("fastapi")
 
-app = FastAPI(root_path="/convai")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logging.info("FastAPI app starting...")
+    yield
+    logging.info("FastAPI app shutting down. Flushing traces...")
+    from routers.llm_inference import tracer_provider
+    try:
+        res = tracer_provider.force_flush()
+        logging.info(f"OpenTelemetry force_flush result: {res}")
+    except Exception as e:
+        logging.error(f"Error flushing traces on shutdown: {e}")
+
+app = FastAPI(root_path="/convai", lifespan=lifespan)
 
 @app.get("/")
 def root():

@@ -95,14 +95,12 @@ async def _dep(request: ChatCompletionRequest):  # FastAPI will inject request h
     parent_span.set_attribute(SpanAttributes.OPENINFERENCE_SPAN_KIND, OpenInferenceSpanKindValues.CHAIN.value)
     # Route this trace into the client's own Phoenix project by database name
     parent_span.set_attribute("openinference.project.name", request.database_name)
+    parent_span.set_attribute(SpanAttributes.USER_ID, str(request.user_id))
 
-    # [RATE-LIMIT-DISABLED] Rate limiter bypassed — re-enable by restoring the line below:
-    # return await user_quota_limiter(request, tracer, parent_span)
-
-    from opentelemetry.trace import set_span_in_context
-    ctx = set_span_in_context(parent_span)
-    pool = await __import__('database').connect_to_db(request.database_name)
-    return {"pool": pool, "request": request, "ctx": ctx, "parent_span": parent_span, "tracer": tracer}
+    from routers.user_quota_limiter import user_quota_limiter
+    res = await user_quota_limiter(request, tracer, parent_span)
+    res["tracer"] = tracer
+    return res
 
 
 ## Define the router config
@@ -133,11 +131,18 @@ async def chat_completion(
         ctx = request_data['ctx']
         parent_span = request_data['parent_span']
         
+        token_usage = {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+        }
+
         ## Assign request parameters to variables
         chat_history = request.chat_history
         raw_user_input = request.user_input
         database_name = request.database_name
         user_id = request.user_id
+        parent_span.set_attribute(SpanAttributes.USER_ID, str(user_id))
         facm_code = request.facm_code
         
         logging.info("Client Domain: %s", database_name)
@@ -164,6 +169,7 @@ async def chat_completion(
             span1.set_attributes({
                 SpanAttributes.OPENINFERENCE_SPAN_KIND: OpenInferenceSpanKindValues.LLM.value,
                 "info": "Classify the user input to determine the intent and return the action to be taken",
+                SpanAttributes.USER_ID: str(user_id)
                 })
             
             # intent = intent_classification(raw_user_input, last_n_user_queries, CLASSIFICATION_MODEL_ID, span=span1)
@@ -184,10 +190,20 @@ async def chat_completion(
 
             span1.set_status(Status(StatusCode.OK))
         
+        # Collect tokens from span1
+        s1_prompt = int(span1.attributes.get("llm.token_count.prompt") or 0)
+        s1_completion = int(span1.attributes.get("llm.token_count.completion") or 0)
+        token_usage["prompt_tokens"] += s1_prompt
+        token_usage["completion_tokens"] += s1_completion
+        token_usage["total_tokens"] += (s1_prompt + s1_completion)
+        
         if intent["action"] == "return_greeting":
             # print("Intent Classification Result:", intent["action"])
             logging.info("Returning greeting response.")
             process_time = time.time() - start_time
+            async with pool.acquire() as conn:
+                await conn.execute(UPDATE_USER_QUOTA_USAGE, int(user_id), token_usage["total_tokens"])
+                logging.info(f"User Quota Updated for greeting response. Spent: {token_usage['total_tokens']} tokens.")
             parent_span.set_attribute(SpanAttributes.OUTPUT_VALUE, intent["message"])
             parent_span.set_status(Status(StatusCode.OK))
             parent_span.end()
@@ -201,6 +217,9 @@ async def chat_completion(
             # print("Intent Classification Result:", intent["action"])
             logging.info("Returning rejection response.")
             process_time = time.time() - start_time
+            async with pool.acquire() as conn:
+                await conn.execute(UPDATE_USER_QUOTA_USAGE, int(user_id), token_usage["total_tokens"])
+                logging.info(f"User Quota Updated for rejection response. Spent: {token_usage['total_tokens']} tokens.")
             parent_span.set_attribute(SpanAttributes.OUTPUT_VALUE, intent["message"])
             parent_span.set_status(Status(StatusCode.OK))
             parent_span.end()
@@ -250,6 +269,11 @@ async def chat_completion(
             })
 
             span2.set_status(Status(StatusCode.OK))
+        
+        # Collect tokens from span2
+        s2_prompt = int(span2.attributes.get("llm.token_count.prompt") or 0)
+        token_usage["prompt_tokens"] += s2_prompt
+        token_usage["total_tokens"] += s2_prompt
     
     ## --------------------------------------------------------------------------------------------------- #
     ##    Generate SQL for the user input
@@ -268,6 +292,7 @@ async def chat_completion(
             span3.set_attributes({
                 SpanAttributes.OPENINFERENCE_SPAN_KIND: OpenInferenceSpanKindValues.LLM.value,
                 "info": "LLM call to generate SQL",
+                SpanAttributes.USER_ID: str(user_id)
             })
 
             ## Prompt = Instructions + table schema + example + user_input
@@ -282,14 +307,6 @@ async def chat_completion(
             })
 
             table_rows = await sql_agent(start_time, sql_generation_prompt, pool, text_generation_model, span3, loop, trace, facm_code)
-            
-            # [RATE-LIMIT-DISABLED] Quota deduction skipped — re-enable by uncommenting the block below:
-            # async with pool.acquire() as conn:
-            #     await conn.execute(UPDATE_USER_QUOTA_USAGE, int(user_id))
-            #     logging.info("User Quota Updated after SQL generation")
-            #     parent_span.set_attributes({
-            #         "metadata.user_quota_details.updated_after_SQL": True
-            #     })
             
             span3.set_status(Status(StatusCode.OK))
 
@@ -313,12 +330,31 @@ async def chat_completion(
                 parent_span.set_attribute(SpanAttributes.OUTPUT_VALUE, large_volume_response)
                 parent_span.set_status(Status(StatusCode.OK))
                 parent_span.end()
+                
+                # Collect tokens from span3
+                s3_prompt = int(span3.attributes.get("llm.token_count.prompt") or 0)
+                s3_completion = int(span3.attributes.get("llm.token_count.completion") or 0)
+                token_usage["prompt_tokens"] += s3_prompt
+                token_usage["completion_tokens"] += s3_completion
+                token_usage["total_tokens"] += (s3_prompt + s3_completion)
+                
+                async with pool.acquire() as conn:
+                    await conn.execute(UPDATE_USER_QUOTA_USAGE, int(user_id), token_usage["total_tokens"])
+                    logging.info(f"User Quota Updated for large volume response. Spent: {token_usage['total_tokens']} tokens.")
+                    
                 return Response(
                     status_code=status.HTTP_200_OK,
                     content=large_volume_response,
                     headers={"X-Response-Time": f"{process_time:.6f} seconds"},
                     media_type="text/plain"
                 )
+
+        # Collect tokens from span3
+        s3_prompt = int(span3.attributes.get("llm.token_count.prompt") or 0)
+        s3_completion = int(span3.attributes.get("llm.token_count.completion") or 0)
+        token_usage["prompt_tokens"] += s3_prompt
+        token_usage["completion_tokens"] += s3_completion
+        token_usage["total_tokens"] += (s3_prompt + s3_completion)
 
         if table_rows:
             ## Convert each asyncpg Record to a dictionary
@@ -334,6 +370,7 @@ async def chat_completion(
                 span4.set_attributes({
                     SpanAttributes.OPENINFERENCE_SPAN_KIND: OpenInferenceSpanKindValues.LLM.value,
                     "info": "LLM call to generate final response",
+                    SpanAttributes.USER_ID: str(user_id)
                 })
                 
                 try:
@@ -379,6 +416,13 @@ async def chat_completion(
                 except Exception as e:
                     span4.record_exception(e)
                     raise
+            
+            # Collect tokens from span4
+            s4_prompt = int(span4.attributes.get("llm.token_count.prompt") or 0)
+            s4_completion = int(span4.attributes.get("llm.token_count.completion") or 0)
+            token_usage["prompt_tokens"] += s4_prompt
+            token_usage["completion_tokens"] += s4_completion
+            token_usage["total_tokens"] += (s4_prompt + s4_completion)
                 
         # Returns a streaming response
         process_time = time.time() - start_time
@@ -388,7 +432,7 @@ async def chat_completion(
         api_response = StreamingResponse(traced_stream(ctx, buffer_container), media_type="text/plain", 
                                             parent_span=parent_span, buffer_container=buffer_container, 
                                             db_pool=pool, user_id=user_id, quoate_usage_update_query=UPDATE_USER_QUOTA_USAGE,
-                                            logging=logging)
+                                            logging=logging, token_usage=token_usage)
         
         api_response.headers["X-Response-Time"] = f"{process_time:.6f} seconds"
         

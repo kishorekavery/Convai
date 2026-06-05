@@ -16,9 +16,12 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
     handlers=[
         logging.FileHandler(LOG_FILE),  # Logs to a file
-        # logging.StreamHandler()  # Logs to console
+        logging.StreamHandler()  # Logs to console
     ]
 )
+
+# Suppress noisy OpenTelemetry warning/validation logs
+logging.getLogger("opentelemetry").setLevel(logging.ERROR)
 
 # Get a logger instance
 def get_logger(name):
