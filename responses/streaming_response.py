@@ -81,9 +81,13 @@ class CustomStreamingResponse(StreamingResponse):
         '''
             Updates the user AI quota after the final response
         '''
+        
         async with self.pool.acquire() as conn:
+            # await conn.execute(self.quoate_usage_update_query, int(self.user_id))
+            # self.logging.info("User Quota Updated after final response generation")
             await conn.execute(self.quoate_usage_update_query, int(self.user_id), self.token_usage["total_tokens"])
             self.logging.info(f"User Quota Updated after final response generation. Spent: {self.token_usage['total_tokens']} tokens.")
+
 
     async def stream_response(self, send: Send) -> None:
         
@@ -104,6 +108,7 @@ class CustomStreamingResponse(StreamingResponse):
             
             await send({"type": "http.response.body", "body": b"", "more_body": False})
 
+            #changed
             # Enable if user quota usage has to be updated after final response
             update_quota_after_final_response=True
             await asyncio.shield(self._update_user_quota())

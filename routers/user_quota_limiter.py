@@ -38,9 +38,15 @@ async def user_quota_limiter(request: ChatCompletionRequest, tracer, parent_span
         parent_span.set_attributes(metadata_payload)
 
         with tracer.start_as_current_span("Rate Limiter", context=ctx, kind=SpanKind.INTERNAL) as rate_limiter:
+            # changed
+            # rate_limiter.set_attributes({
+            #         SpanAttributes.OPENINFERENCE_SPAN_KIND: OpenInferenceSpanKindValues.TOOL.value,
+            #         "info": "Rate Limiter"
+            #     })
             rate_limiter.set_attributes({
                     SpanAttributes.OPENINFERENCE_SPAN_KIND: OpenInferenceSpanKindValues.TOOL.value,
-                    "info": "Rate Limiter"
+                    "info": "Rate Limiter",
+                    SpanAttributes.USER_ID: str(user_id)
                 })
 
             async with pool.acquire() as conn:

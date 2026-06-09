@@ -1,4 +1,4 @@
-# Use an official Python 3.12 slim image explicitly built for amd64 architecture
+# Use an official Python 3.12 slim image
 FROM python:3.12-slim
 
 # Set environment variables

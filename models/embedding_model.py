@@ -1,5 +1,4 @@
 import json
-
 from config import get_logger
 from config import EMBEDDING_MODEL_ACCEPT, EMBEDDING_MODEL_CONTENT_TYPE, EMBEDDING_MODEL_DIMENSIONS, EMBEDDING_MODEL_ID, EMBEDDING_MODEL_NORMALIZATION
 from models import BedrockClient

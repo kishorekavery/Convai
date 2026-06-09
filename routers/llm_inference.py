@@ -241,9 +241,15 @@ async def chat_completion(
     ## --------------------------------------------------------------------------------------------------- #
 
         with tracer.start_as_current_span("2. embedding_generation", context=ctx, kind=SpanKind.CLIENT) as span2:
+            # changed
+            # span2.set_attributes({
+            #     SpanAttributes.OPENINFERENCE_SPAN_KIND: OpenInferenceSpanKindValues.EMBEDDING.value,
+            #     "info": "Generates embedding of the processed user query",
+            # })
             span2.set_attributes({
                 SpanAttributes.OPENINFERENCE_SPAN_KIND: OpenInferenceSpanKindValues.EMBEDDING.value,
                 "info": "Generates embedding of the processed user query",
+                SpanAttributes.USER_ID: str(user_id)
             })
 
             span2.set_attributes({
