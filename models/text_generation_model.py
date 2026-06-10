@@ -11,7 +11,7 @@ class ChatModel(BedrockClient):
     def __init__(self):
         super().__init__(model_id=CHAT_MODEL_ID, contentType=CHAT_MODEL_CONTENT_TYPE, accept=CHAT_MODEL_ACCEPT)
     
-    def generate_response(self, prompt):
+    def generate_response(self, prompt, span=None):
 
         if not prompt or not isinstance(prompt, str):
             logging.error("Input text must be a non-empty string")
@@ -32,25 +32,23 @@ class ChatModel(BedrockClient):
 
         response_text = response.get("generation")
 
-        ## Log as table
-        # log_json = [{
-        #     "Prompt": str(prompt),
-        #     "Response Text": str(response_text),
-        #     "Prompt Token Count": str(response.get("prompt_token_count")),
-        #     "Generation Token Count": str(response.get("generation_token_count")),
-        #     "Reasong for Stopping":  str(response.get("stop_reason"))
-        # }]
-
-        # logging_table = tabulate(log_json, headers="keys", tablefmt="fancy_grid")
-
-        # logging.info("Llama Model Inference Log:\n%s",logging_table)
-
         invocation_processing_time = time() - start_time
+
+        prompt_tokens = response.get("prompt_token_count", 0)
+        completion_tokens = response.get("generation_token_count", 0)
+        total_tokens = prompt_tokens + completion_tokens
+
+        if span:
+            span.set_attributes({
+                "llm.token_count.prompt": prompt_tokens,
+                "llm.token_count.completion": completion_tokens,
+                "llm.token_count.total": total_tokens
+            })
 
         ## log as Text
         logging.info("Llama Model (Non Streaming) Inference Log:\nPrompt: %s\nAI Response : %s\n\nInvocation Metrics:\nPrompt Token Count: %s\nOuput Token Count: %s\nReasong for Stopping: %s\nInvocation Processing Time: %s",
-                    str(prompt), str(response_text), str(response.get("prompt_token_count")),
-                    str(response.get("generation_token_count")),str(response.get("stop_reason")), str(invocation_processing_time)
+                    str(prompt), str(response_text), str(prompt_tokens),
+                    str(completion_tokens),str(response.get("stop_reason")), str(invocation_processing_time)
                     )
         
         return response_text

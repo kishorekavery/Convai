@@ -37,6 +37,12 @@ class TitanEmbeddingModel(BedrockClient):
             # logging.info("Generated Vector: %s", embedding)
             logging.info("Input Text Token Size :%s", inputtext_token)
 
+            if span and inputtext_token is not None:
+                span.set_attributes({
+                    "llm.token_count.prompt": inputtext_token,
+                    "llm.token_count.total": inputtext_token,
+                })
+
             if not embedding:
                 logging.info(f"AWS Bedrock Response Body: {json.dumps(response, indent=2)}")
                 logging.error("Failed to retrieve embedding for input:", exc_info=True)

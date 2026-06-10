@@ -17,7 +17,7 @@ async def sql_agent(start_time, sql_generation_prompt, client_dbconnection_pool,
     
     def _sql_generation(sql_generation_prompt, span):
         with trace.use_span(span):
-            return text_generation_model.generate_response(sql_generation_prompt)
+            return text_generation_model.generate_response(sql_generation_prompt, span=span)
 
     import contextvars
     ctx_copied = contextvars.copy_context()

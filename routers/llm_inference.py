@@ -49,12 +49,13 @@ from responses import StreamingResponse
 logging = get_logger(__name__)
 ## ---- Arize Phoenix Tracer Setup  ------------------------------------------------------------------------------------------------------- #
 
-# Single global tracer provider — BedrockInstrumentor is a global monkey-patch and must only be called once
-tracer_provider = register(
-    project_name=COLLECTOR_PROJECT_NAME,
-    batch=False,
-    endpoint=COLLECTOR_ENDPOINT,
-    headers={"Authorization": f"Bearer {PHOENIX_API_KEY}"} if PHOENIX_API_KEY else {}
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.resources import Resource
+from phoenix.otel.otel import SimpleSpanProcessor as PhoenixSimpleSpanProcessor
+from opentelemetry import trace as otel_trace
+
+tracer_provider = TracerProvider(
+    resource=Resource.create({ResourceAttributes.PROJECT_NAME: COLLECTOR_PROJECT_NAME})
 )
 
 # ContextVar to propagate the current database/project name across the request lifecycle
@@ -75,11 +76,22 @@ class DynamicProjectProcessor(SpanProcessor):
             dynamic_resource = Resource.create({ResourceAttributes.PROJECT_NAME: db_name})
             span._resource = span.resource.merge(dynamic_resource)
 
-# Register the dynamic project name mutator processor
+# 1. Add DynamicProjectProcessor FIRST so it runs before the exporter
 tracer_provider.add_span_processor(DynamicProjectProcessor())
 
+# 2. Add the Phoenix Exporter SECOND
+tracer_provider.add_span_processor(
+    PhoenixSimpleSpanProcessor(
+        endpoint=COLLECTOR_ENDPOINT,
+        headers={"Authorization": f"Bearer {PHOENIX_API_KEY}"} if PHOENIX_API_KEY else {}
+    )
+)
+
+# Set the global tracer provider manually since we bypass `register`
+otel_trace.set_tracer_provider(tracer_provider)
+
 # Instrument Bedrock SDK once globally
-BedrockInstrumentor().instrument(tracer_provider=tracer_provider)
+# BedrockInstrumentor().instrument(tracer_provider=tracer_provider)
 
 # Global tracer for manual spans
 tracer = tracer_provider.get_tracer(__name__)
@@ -113,6 +125,9 @@ router = APIRouter(
 async def chat_completion(
         request_data= Depends(_dep)
     ):
+    span1 = None
+    span2 = None
+    span3 = None
 
     try:
     ## --------------------------------------------------------------------------------------------------- #
@@ -372,14 +387,15 @@ async def chat_completion(
     ## --------------------------------------------------------------------------------------------------- #
 
         async def traced_stream(ctx, buffer_container):
-            with tracer.start_as_current_span("4. final_response", context=ctx, kind=SpanKind.CLIENT) as span4:
-                span4.set_attributes({
-                    SpanAttributes.OPENINFERENCE_SPAN_KIND: OpenInferenceSpanKindValues.LLM.value,
-                    "info": "LLM call to generate final response",
-                    SpanAttributes.USER_ID: str(user_id)
-                })
-                
-                try:
+            span4 = None
+            try:
+                with tracer.start_as_current_span("4. final_response", context=ctx, kind=SpanKind.CLIENT) as span4:
+                    span4.set_attributes({
+                        SpanAttributes.OPENINFERENCE_SPAN_KIND: OpenInferenceSpanKindValues.LLM.value,
+                        "info": "LLM call to generate final response",
+                        SpanAttributes.USER_ID: str(user_id)
+                    })
+                    
                     response_to_user_prompt = format_response_to_user_prompt(raw_user_input, context_for_user_response, table_rows, 
                                                                              chat_history=last_n_user_queries)
 
@@ -419,16 +435,19 @@ async def chat_completion(
                     })
                     span4.set_status(Status(StatusCode.OK))
 
-                except Exception as e:
+            except Exception as e:
+                if span4:
                     span4.record_exception(e)
-                    raise
-            
-            # Collect tokens from span4
-            s4_prompt = int(span4.attributes.get("llm.token_count.prompt") or 0)
-            s4_completion = int(span4.attributes.get("llm.token_count.completion") or 0)
-            token_usage["prompt_tokens"] += s4_prompt
-            token_usage["completion_tokens"] += s4_completion
-            token_usage["total_tokens"] += (s4_prompt + s4_completion)
+                    span4.set_status(Status(StatusCode.ERROR, description=str(e)))
+                raise
+            finally:
+                if span4:
+                    # Collect tokens from span4
+                    s4_prompt = int(span4.attributes.get("llm.token_count.prompt") or 0)
+                    s4_completion = int(span4.attributes.get("llm.token_count.completion") or 0)
+                    token_usage["prompt_tokens"] += s4_prompt
+                    token_usage["completion_tokens"] += s4_completion
+                    token_usage["total_tokens"] += (s4_prompt + s4_completion)
                 
         # Returns a streaming response
         process_time = time.time() - start_time
@@ -445,12 +464,40 @@ async def chat_completion(
         return api_response
 
     except HTTPException as http_exc:
+        try:
+            total_tokens_spent = 0
+            for span_var in [span1, span2, span3]:
+                if span_var and hasattr(span_var, "attributes"):
+                    p_tokens = int(span_var.attributes.get("llm.token_count.prompt") or 0)
+                    c_tokens = int(span_var.attributes.get("llm.token_count.completion") or 0)
+                    total_tokens_spent += (p_tokens + c_tokens)
+            if total_tokens_spent > 0 and 'pool' in locals() and 'user_id' in locals():
+                async with pool.acquire() as conn:
+                    await conn.execute(UPDATE_USER_QUOTA_USAGE, int(user_id), total_tokens_spent)
+                    logging.info(f"User Quota Updated on HTTPException. Spent: {total_tokens_spent} tokens.")
+        except Exception as e_quota:
+            logging.error(f"Failed to update user quota on HTTPException: {e_quota}")
+
         parent_span.record_exception(http_exc)
         parent_span.set_status(Status(StatusCode.ERROR, description=str(http_exc)))
         parent_span.end()
         raise http_exc  # Propagate FastAPI HTTPException as it is
     
     except Exception as e:
+        try:
+            total_tokens_spent = 0
+            for span_var in [span1, span2, span3]:
+                if span_var and hasattr(span_var, "attributes"):
+                    p_tokens = int(span_var.attributes.get("llm.token_count.prompt") or 0)
+                    c_tokens = int(span_var.attributes.get("llm.token_count.completion") or 0)
+                    total_tokens_spent += (p_tokens + c_tokens)
+            if total_tokens_spent > 0 and 'pool' in locals() and 'user_id' in locals():
+                async with pool.acquire() as conn:
+                    await conn.execute(UPDATE_USER_QUOTA_USAGE, int(user_id), total_tokens_spent)
+                    logging.info(f"User Quota Updated on Exception. Spent: {total_tokens_spent} tokens.")
+        except Exception as e_quota:
+            logging.error(f"Failed to update user quota on Exception: {e_quota}")
+
         logging.error("HTTP Exception. Status Code: %s Error: %s",status.HTTP_500_INTERNAL_SERVER_ERROR,{str(e)})
         parent_span.record_exception(e)
         parent_span.set_status(Status(StatusCode.ERROR, description=str(e)))

@@ -113,11 +113,21 @@ class CustomStreamingResponse(StreamingResponse):
             update_quota_after_final_response=True
             await asyncio.shield(self._update_user_quota())
 
+        except Exception as e:
+            self.parent_span.record_exception(e)
+            self.parent_span.set_status(Status(StatusCode.ERROR, description=str(e)))
+            raise
         finally:
             self.parent_span.set_attribute(SpanAttributes.OUTPUT_VALUE, "".join(self.buffer_container))
             
             if update_quota_after_final_response:
                 self.parent_span.set_attribute("metadata.user_quota_details.updated_after_final_response", True)
+                self.parent_span.set_status(Status(StatusCode.OK))
+            else:
+                try:
+                    await asyncio.shield(self._update_user_quota())
+                    self.parent_span.set_attribute("metadata.user_quota_details.updated_on_stream_failure", True)
+                except Exception as e_quota:
+                    self.logging.error(f"Failed to update user quota on stream failure: {e_quota}")
             
-            self.parent_span.set_status(Status(StatusCode.OK))
             self.parent_span.end()
