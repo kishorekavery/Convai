@@ -16,32 +16,30 @@ from openinference.semconv.resource import ResourceAttributes
 from openinference.instrumentation.bedrock import BedrockInstrumentor
 from openinference.semconv.trace import SpanAttributes, OpenInferenceSpanKindValues
 from phoenix.otel import register
+
 ## Internal Packages
 # from routers import user_quota_limiter
 
-# pyrefly: ignore [missing-import]
 from config import get_logger
 from config import EMBEDDING_MODEL_ID, CHAT_MODEL_ID, CLASSIFICATION_MODEL_ID
 from config import COLLECTOR_ENDPOINT, COLLECTOR_PROJECT_NAME, PHOENIX_API_KEY
 
-
-# [RATE-LIMIT-DISABLED] rate_limiter bypassed
-# from routers import rate_limiter
-
+from routers import user_quota_limiter
 from database import fetch_context, fetch_user_details
 from database import UPDATE_USER_QUOTA_USAGE
 
 from dataprocessing import get_last_and_current_user_query, get_last_n_user_queries
-
 from models import ChatCompletionRequest
-
 from prompts import format_sql_prompt, format_response_to_user_prompt
+
 ## Initiate the models
 from models import TitanEmbeddingModel
 from models import ChatModel
 from agents import sql_agent
 from agents import intent_classification
+
 # Custom Implementation of Starlette StreamingResponse Class
+# pyrefly: ignore [missing-import]
 from responses import StreamingResponse
 
 
@@ -109,7 +107,7 @@ async def _dep(request: ChatCompletionRequest):  # FastAPI will inject request h
     parent_span.set_attribute("openinference.project.name", request.database_name)
     parent_span.set_attribute(SpanAttributes.USER_ID, str(request.user_id))
 
-    from routers.user_quota_limiter import user_quota_limiter
+    
     res = await user_quota_limiter(request, tracer, parent_span)
     res["tracer"] = tracer
     return res

@@ -1,29 +1,40 @@
-from tabulate import tabulate
 from time import time
 
 from config import get_logger
-from config import CHAT_MODEL_ID, CHAT_MODEL_CONTENT_TYPE, CHAT_MODEL_ACCEPT, CHAT_MODEL_MAX_GEN_LENGTH, CHAT_MODEL_TEMPERATURE, CHAT_MODEL_TOP_P
+from config import (
+    CHAT_MODEL_ID,
+    CHAT_MODEL_CONTENT_TYPE,
+    CHAT_MODEL_ACCEPT,
+    CHAT_MODEL_MAX_GEN_LENGTH,
+    CHAT_MODEL_TEMPERATURE,
+    CHAT_MODEL_TOP_P,
+)
 from models import BedrockClient
 
 logging = get_logger(__name__)
 
+
 class ChatModel(BedrockClient):
     def __init__(self):
-        super().__init__(model_id=CHAT_MODEL_ID, contentType=CHAT_MODEL_CONTENT_TYPE, accept=CHAT_MODEL_ACCEPT)
-    
+        super().__init__(
+            model_id=CHAT_MODEL_ID,
+            contentType=CHAT_MODEL_CONTENT_TYPE,
+            accept=CHAT_MODEL_ACCEPT,
+        )
+
     def generate_response(self, prompt, span=None):
 
         if not prompt or not isinstance(prompt, str):
             logging.error("Input text must be a non-empty string")
             raise ValueError("Input text must be a non-empty string.")
-        
+
         payload = {
             "prompt": prompt,
             "max_gen_len": CHAT_MODEL_MAX_GEN_LENGTH,
             "temperature": CHAT_MODEL_TEMPERATURE,
-            "top_p": CHAT_MODEL_TOP_P
+            "top_p": CHAT_MODEL_TOP_P,
         }
-        
+
         logging.info("Llama Model Invoked (Non Streaming Response)")
 
         start_time = time()
@@ -39,50 +50,68 @@ class ChatModel(BedrockClient):
         total_tokens = prompt_tokens + completion_tokens
 
         if span:
-            span.set_attributes({
-                "llm.token_count.prompt": prompt_tokens,
-                "llm.token_count.completion": completion_tokens,
-                "llm.token_count.total": total_tokens
-            })
+            span.set_attributes(
+                {
+                    "llm.token_count.prompt": prompt_tokens,
+                    "llm.token_count.completion": completion_tokens,
+                    "llm.token_count.total": total_tokens,
+                }
+            )
 
         ## log as Text
-        logging.info("Llama Model (Non Streaming) Inference Log:\nPrompt: %s\nAI Response : %s\n\nInvocation Metrics:\nPrompt Token Count: %s\nOuput Token Count: %s\nReasong for Stopping: %s\nInvocation Processing Time: %s",
-                    str(prompt), str(response_text), str(prompt_tokens),
-                    str(completion_tokens),str(response.get("stop_reason")), str(invocation_processing_time)
-                    )
-        
+        logging.info(
+            "Llama Model (Non Streaming) Inference Log:\nPrompt: %s\nAI Response : %s\n\nInvocation Metrics:\nPrompt Token Count: %s\nOuput Token Count: %s\nReasong for Stopping: %s\nInvocation Processing Time: %s",
+            str(prompt),
+            str(response_text),
+            str(prompt_tokens),
+            str(completion_tokens),
+            str(response.get("stop_reason")),
+            str(invocation_processing_time),
+        )
+
         return response_text
-    
+
     def generate_stream_response(self, prompt, span):
 
         if not prompt or not isinstance(prompt, str):
             logging.error("Input text must be a non-empty string")
             raise ValueError("Input text must be a non-empty string.")
-        
+
         payload = {
             "prompt": prompt,
             "max_gen_len": CHAT_MODEL_MAX_GEN_LENGTH,
             "temperature": CHAT_MODEL_TEMPERATURE,
-            "top_p": CHAT_MODEL_TOP_P
+            "top_p": CHAT_MODEL_TOP_P,
         }
 
         # "body": "{\"prompt\":\"this is where you place your input text\",\"max_gen_len\":512,\"temperature\":0.5,\"top_p\":0.9}"
 
-        #log
+        # log
         logging.info("Llama Model Invoked (Streaming Response)")
-           
+
         for chunk in self.invoke_model_with_response_stream(payload, span):
             yield chunk
 
 
 if __name__ == "__main__":
+
     class MockSpan:
         """Minimal no-op span for local testing without a live OTel collector."""
-        def set_attributes(self, *args, **kwargs): pass
-        def set_attribute(self, *args, **kwargs): pass
-        def set_status(self, *args, **kwargs): pass
-        def record_exception(self, *args, **kwargs): pass
-        def end(self, *args, **kwargs): pass
+
+        def set_attributes(self, *args, **kwargs):
+            pass
+
+        def set_attribute(self, *args, **kwargs):
+            pass
+
+        def set_status(self, *args, **kwargs):
+            pass
+
+        def record_exception(self, *args, **kwargs):
+            pass
+
+        def end(self, *args, **kwargs):
+            pass
 
     def run_test():
         Chat_model = ChatModel()
@@ -97,4 +126,5 @@ if __name__ == "__main__":
             print(text, end="", flush=True)
 
         print()  # newline after stream ends
+
     run_test()

@@ -7,7 +7,47 @@
       "request": "launch",
       "module": "dataprocessing.kbe_table_embedding_generation",
       "justMyCode": true,
-      "python": "/Users/presanth/Code/-Working/convai-bedrock-arize-quota/.venv/bin/python3"
+      "python": "${workspaceFolder}/.venv/bin/python3"
+    },
+    {
+      "name": "Run application.py",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "application",
+      "justMyCode": true,
+      "python": "${workspaceFolder}/.venv/bin/python3"
+    },
+    {
+      "name": "Run intent_classification_agent",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "agents.intent_classification_agent",
+      "justMyCode": true,
+      "python": "${workspaceFolder}/.venv/bin/python3"
+    },
+    {
+      "name": "Run sql_agent",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "agents.sql_agent",
+      "justMyCode": true,
+      "python": "${workspaceFolder}/.venv/bin/python3"
+    },
+    {
+      "name": "Run FastAPI server",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": [
+        "main:app",
+        "--reload",
+        "--host",
+        "[IP_ADDRESS]",
+        "--port",
+        "8000"
+      ],
+      "justMyCode": true,
+      "python": "${workspaceFolder}/.venv/bin/python3"
     }
   ]
 }

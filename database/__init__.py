@@ -3,7 +3,9 @@
 from .db_connection import connect_to_db as connect_to_db
 from .db_connection import validate_database as validate_database
 
-from .db_queries import CHECK_IF_USER_QUOTA_LIMIT_EXISTS as CHECK_IF_USER_QUOTA_LIMIT_EXISTS
+from .db_queries import (
+    CHECK_IF_USER_QUOTA_LIMIT_EXISTS as CHECK_IF_USER_QUOTA_LIMIT_EXISTS,
+)
 from .db_queries import CHECK_IF_USER_QUOTA_LEFT as CHECK_IF_USER_QUOTA_LEFT
 from .db_queries import UPDATE_USER_QUOTA_USAGE as UPDATE_USER_QUOTA_USAGE
 from .db_queries import format_schema as format_schema

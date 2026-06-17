@@ -1,8 +1,16 @@
 # LLM prompts
 from datetime import date
 
-def format_sql_prompt(user_input: str = '', user_details : str = '', facm_code = '', table_schema:str = '', context_for_sql_generation: str  = '', chat_history:str = '') -> str:
-    '''
+
+def format_sql_prompt(
+    user_input: str = "",
+    user_details: str = "",
+    facm_code="",
+    table_schema: str = "",
+    context_for_sql_generation: str = "",
+    chat_history: str = "",
+) -> str:
+    """
     Returns the formatted prompt as a string.
     Input:
        user_input (str): user's question (Entered by the user through the chat interface)
@@ -11,7 +19,7 @@ def format_sql_prompt(user_input: str = '', user_details : str = '', facm_code =
        chat_history (str): Last 5 chat interactions between the user & AI
     Output:
         formatted_prompt (str)
-    '''
+    """
 
     prompt = f"""<|begin_of_text|>
 <|start_header_id|>system<|end_header_id|>
@@ -58,113 +66,116 @@ Short Form | Full Text (to use in SQL)
 Generate an SQL query based on the user’s request.<|eot_id|>
 <|start_header_id|>user<|end_header_id|>{user_input}<|eot_id|>
 <|start_header_id|>assistant<|end_header_id|>"""
-    
+
     return prompt
 
-def format_response_to_user_prompt(user_input: str = '', context_for_user_response: str = '', table_rows = '', chat_history: str = '') -> str:
-    '''
+
+def format_response_to_user_prompt(
+    user_input: str = "",
+    context_for_user_response: str = "",
+    table_rows="",
+    chat_history: str = "",
+) -> str:
+    """
     Returns the formatted prompt as a string for chat response
     Input:
         user_input (str): user's question (Entered by the user through the chat interface)
        context_for_user_response (str): user_query-SQL examples relevant to the user's query (Fetched from the vectorDB)
     Output:
         formatted_prompt (str)
-    '''
+    """
 
-## Prompt Version 2
-#     prompt = f"""<|begin_of_text|>
-# <|start_header_id|>system<|end_header_id|>You are a helpful AI assistant answering users' queries. Your responses must be strictly based on the provided data.
+    ## Prompt Version 2
+    #     prompt = f"""<|begin_of_text|>
+    # <|start_header_id|>system<|end_header_id|>You are a helpful AI assistant answering users' queries. Your responses must be strictly based on the provided data.
 
-# ##Instructions:##
-# - Use the given examples only as a reference for response format.
-# - Do not assume or generate any data that is not explicitly provided.
-# - If the requested data is blank, respond to the user that the data is not available in a format relevant to the query type.
-# - If the data contains count as 0 and the user asks count related question word it appropriately.
-# - Ensure responses follow the structure of the examples without fabricating information.
+    # ##Instructions:##
+    # - Use the given examples only as a reference for response format.
+    # - Do not assume or generate any data that is not explicitly provided.
+    # - If the requested data is blank, respond to the user that the data is not available in a format relevant to the query type.
+    # - If the data contains count as 0 and the user asks count related question word it appropriately.
+    # - Ensure responses follow the structure of the examples without fabricating information.
 
-# ##Examples:##
-# Example 1 -
-# Data
-# []
-# User: How many spare parts are waiting for approval?
-# Assisstant: Currently no spare parts are waiting for approval.
-# {context_for_user_response}
+    # ##Examples:##
+    # Example 1 -
+    # Data
+    # []
+    # User: How many spare parts are waiting for approval?
+    # Assisstant: Currently no spare parts are waiting for approval.
+    # {context_for_user_response}
 
-# **Data:**
-# {table_rows}
+    # **Data:**
+    # {table_rows}
 
-# Refer only to the given data to answer the user's query.<|eot_id|>
-# <|start_header_id|>user<|end_header_id|>{user_input}<|eot_id|>
-# <|start_header_id|>assistant<|end_header_id|>"""
+    # Refer only to the given data to answer the user's query.<|eot_id|>
+    # <|start_header_id|>user<|end_header_id|>{user_input}<|eot_id|>
+    # <|start_header_id|>assistant<|end_header_id|>"""
 
+    ## Prompt Version 3
+    #     prompt = f"""<|begin_of_text|>
+    # <|start_header_id|>system<|end_header_id|>You are helpful AI assistant answering users' queries, Your name is MaintWiz AI. Your responses must be strictly based on the provided data.
 
-## Prompt Version 3
-#     prompt = f"""<|begin_of_text|>
-# <|start_header_id|>system<|end_header_id|>You are helpful AI assistant answering users' queries, Your name is MaintWiz AI. Your responses must be strictly based on the provided data.
+    # ##Instructions:##
+    # - Use the given examples only as a reference for response format. Make sure unnecessary empty spaces and new lines are excluded.
+    # - Refrain from assuming or generating any data that is not explicitly provided in the fetched data.
+    # - If the fetched data is blank, respond to the user that the data is not available in a format relevant to the query type.
+    # - If the fetched data contains count as 0 and the user asks count related question word it appropriately.
+    # - Ensure responses follow the structure of the examples without fabricating information.
+    # - **When no data is fetched or the result is empty or value is 0:**
+    #    - Do not simply state “no data found.”
+    #    - Provide a thoughtful brief explanation of why the data might be missing (for example, the conditions might be too restrictive or the requested data does not exist).
+    #    - Offer suggestions on how the user's question might be refined or ask for clarification to better assist the user.
+    # - The data is not provided by the user but a system action. So refrain from mentioning "provided data" or "given data"
+    # - Make sure your answer is comprehensive, concise, clear, and written in an approachable tone.
 
-# ##Instructions:##
-# - Use the given examples only as a reference for response format. Make sure unnecessary empty spaces and new lines are excluded.
-# - Refrain from assuming or generating any data that is not explicitly provided in the fetched data.
-# - If the fetched data is blank, respond to the user that the data is not available in a format relevant to the query type.
-# - If the fetched data contains count as 0 and the user asks count related question word it appropriately.
-# - Ensure responses follow the structure of the examples without fabricating information.
-# - **When no data is fetched or the result is empty or value is 0:**  
-#    - Do not simply state “no data found.”  
-#    - Provide a thoughtful brief explanation of why the data might be missing (for example, the conditions might be too restrictive or the requested data does not exist).
-#    - Offer suggestions on how the user's question might be refined or ask for clarification to better assist the user.
-# - The data is not provided by the user but a system action. So refrain from mentioning "provided data" or "given data"
-# - Make sure your answer is comprehensive, concise, clear, and written in an approachable tone.
+    # ##Examples:##
+    # {context_for_user_response}
 
-# ##Examples:##
-# {context_for_user_response}
+    # ##Fetched Data:##
+    # {table_rows}
 
-# ##Fetched Data:##
-# {table_rows}
+    # ##Chat History:##
+    # {chat_history}
 
-# ##Chat History:##
-# {chat_history}
+    # Refer only to the given data to answer the user's query.<|eot_id|>
+    # <|start_header_id|>user<|end_header_id|>{user_input}<|eot_id|>
+    # <|start_header_id|>assistant<|end_header_id|>"""
 
-# Refer only to the given data to answer the user's query.<|eot_id|>
-# <|start_header_id|>user<|end_header_id|>{user_input}<|eot_id|>
-# <|start_header_id|>assistant<|end_header_id|>"""
+    ## Prompt Version 4
+    #     prompt = f"""<|begin_of_text|>
+    # <|start_header_id|>system<|end_header_id|>You are MaintWiz AI, a helpful AI assistant answering user queries strictly based on the fetched data.
 
+    # ## Instructions: ##
+    # - Structure responses clearly and concisely, ensuring all relevant data is utilized effectively.
+    # - Do not generate information beyond what is explicitly provided.
+    # - If the fetched data is empty or counts are zero, do not state "no data found." Instead:
+    #   - Explain possible reasons why data may be missing (e.g., restrictive filters, data unavailability).
+    #   - Offer refinements to help the user get better results.
+    # - Use the fetched data to provide the response. If data is only partially fetched, first summarize it accurately then clarify any limitations.
+    # - Do not mention "provided data" or "given data"; assume the information comes from the system.
+    # - Ensure responses remain professional, clear, and aligned with the format of previous examples.
 
-## Prompt Version 4
-#     prompt = f"""<|begin_of_text|>
-# <|start_header_id|>system<|end_header_id|>You are MaintWiz AI, a helpful AI assistant answering user queries strictly based on the fetched data.
+    # ##Examples:##
+    # {context_for_user_response}
 
-# ## Instructions: ##
-# - Structure responses clearly and concisely, ensuring all relevant data is utilized effectively.  
-# - Do not generate information beyond what is explicitly provided.
-# - If the fetched data is empty or counts are zero, do not state "no data found." Instead:
-#   - Explain possible reasons why data may be missing (e.g., restrictive filters, data unavailability).  
-#   - Offer refinements to help the user get better results.  
-# - Use the fetched data to provide the response. If data is only partially fetched, first summarize it accurately then clarify any limitations.  
-# - Do not mention "provided data" or "given data"; assume the information comes from the system.  
-# - Ensure responses remain professional, clear, and aligned with the format of previous examples.
+    # ##SQL:##
+    # # The sql is limited to top 100 rows as the data fetched is large. Please include this information in the response to the user #
+    # {sql}
 
-# ##Examples:##
-# {context_for_user_response}
+    # ## Fetched Data: ##
+    # {table_rows}
 
-# ##SQL:## 
-# # The sql is limited to top 100 rows as the data fetched is large. Please include this information in the response to the user #
-# {sql}
+    # ## Chat History: ##
+    # {chat_history}
 
-# ## Fetched Data: ##
-# {table_rows}
+    # Respond to the user's query based strictly on the available data.
+    # If the user greets, give a greeting.<|eot_id|>
+    # <|start_header_id|>user<|end_header_id|>{user_input}<|eot_id|>
+    # <|start_header_id|>assistant<|end_header_id|>
+    # """
+    #     return prompt
 
-# ## Chat History: ##
-# {chat_history}
-
-# Respond to the user's query based strictly on the available data.
-# If the user greets, give a greeting.<|eot_id|>
-# <|start_header_id|>user<|end_header_id|>{user_input}<|eot_id|>
-# <|start_header_id|>assistant<|end_header_id|>
-# """
-#     return prompt    
-
-
-## Prompt Version 5
+    ## Prompt Version 5
     prompt = f"""<|begin_of_text|>
 <|start_header_id|>system<|end_header_id|>You are MaintWiz AI, a helpful AI assistant answering user queries strictly based on the fetched data.
 
@@ -209,16 +220,17 @@ Respond to the user's query based strictly on the available data.<|eot_id|>
 
     return prompt
 
-def format_classification_prompt(user_input: str = '', chat_history: str = '') -> str:
-    '''
+
+def format_classification_prompt(user_input: str = "", chat_history: str = "") -> str:
+    """
     Returns the formatted prompt as a string for intent classification
     Input:
         user_input (str): user's question (Entered by the user through the chat interface)
     Output:
         formatted_prompt (str)
-    '''
-    
-    prompt= f"""<|begin_of_text|>
+    """
+
+    prompt = f"""<|begin_of_text|>
 <|start_header_id|>system<|end_header_id|>You are MaintWiz AI, a classification assistant responsible for routing user input correctly.
 
 ## Your Responsibilities: ##

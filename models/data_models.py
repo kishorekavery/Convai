@@ -1,5 +1,6 @@
 from pydantic import BaseModel, field_validator
 
+
 # Request Schema
 class ChatCompletionRequest(BaseModel):
     database_name: str
@@ -14,21 +15,21 @@ class ChatCompletionRequest(BaseModel):
         if not value.strip():
             raise ValueError("Database name must not be empty")
         return value
-    
+
     @field_validator("database_name")
     @classmethod
     def no_spaces(cls, value):
         if " " in value:
             raise ValueError("Database name should not contain spaces")
         return value
-    
+
     @field_validator("user_input")
     @classmethod
     def user_input_not_blank(cls, value):
         if not value.strip():
             raise ValueError("User input must not be empty")
         return value
-    
+
     @field_validator("user_id")
     @classmethod
     def user_id_not_blank(cls, value):
@@ -43,11 +44,60 @@ class ChatCompletionRequest(BaseModel):
             raise ValueError("Facility code must not be empty")
         return value
 
+
 if __name__ == "__main__":
     # Test Cases
-    print(ChatCompletionRequest(database_name="valid_db", user_id="1", user_input="test", facm_code=["code1"], chat_history="history"))
-    print(ChatCompletionRequest(database_name="invalid db", user_id="1", user_input="test", facm_code=["code1"], chat_history="history"))
-    print(ChatCompletionRequest(database_name="valid_db", user_id="1", user_input="", facm_code=["code1"], chat_history="history"))
-    print(ChatCompletionRequest(database_name="valid_db", user_id="1", user_input="test", facm_code=[], chat_history="history"))
-    print(ChatCompletionRequest(database_name="valid_db", user_id="1", user_input="test", facm_code=["code1"], chat_history=""))
-    print(ChatCompletionRequest(database_name="valid_db", user_id="", user_input="test", facm_code=["code1"], chat_history=""))
+    print(
+        ChatCompletionRequest(
+            database_name="valid_db",
+            user_id="1",
+            user_input="test",
+            facm_code=["code1"],
+            chat_history="history",
+        )
+    )
+    print(
+        ChatCompletionRequest(
+            database_name="invalid db",
+            user_id="1",
+            user_input="test",
+            facm_code=["code1"],
+            chat_history="history",
+        )
+    )
+    print(
+        ChatCompletionRequest(
+            database_name="valid_db",
+            user_id="1",
+            user_input="",
+            facm_code=["code1"],
+            chat_history="history",
+        )
+    )
+    print(
+        ChatCompletionRequest(
+            database_name="valid_db",
+            user_id="1",
+            user_input="test",
+            facm_code=[],
+            chat_history="history",
+        )
+    )
+    print(
+        ChatCompletionRequest(
+            database_name="valid_db",
+            user_id="1",
+            user_input="test",
+            facm_code=["code1"],
+            chat_history="",
+        )
+    )
+    print(
+        ChatCompletionRequest(
+            database_name="valid_db",
+            user_id="",
+            user_input="test",
+            facm_code=["code1"],
+            chat_history="",
+        )
+    )
