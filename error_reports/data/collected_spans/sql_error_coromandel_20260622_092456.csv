@@ -1,0 +1,37 @@
+trace_id,span_id,project_name,user_id,user_query,generated_sql,status,row_count,error_type,error_message,llm_model,timestamp,collected_at
+bed8ab7eb29edca7fb144683e39a1a76,34ee2ac801d12de5,coromandel,1278,What is the count of work orders approved in 2025?,"
+
+SELECT 
+workorder_id,
+workorder_facility_code,
+workorder_equipment_code,
+workorder_equipment_name
+FROM 
+ai.workordermasterdetails 
+WHERE 
+workorder_facility_code IN (<facilitycode>)
+AND workorder_createdtime::date = '2026-06-04'
+AND workorder_facility_name = 'CFVZ-GARG'
+LIMIT 100;",empty_result,0,,,arn:aws:bedrock:us-east-1:498398192936:inference-profile/us.meta.llama3-3-70b-instruct-v1:0,2026-06-16T10:04:55.420817+00:00,2026-06-22T09:24:52.720423+00:00
+3a9577de8685ed4a084fc474d97902f7,4d13b9f45a91747a,coromandel,1278,"How does the workorder_equipment_code in CHINP-WO0395658 align with the workorder_category and workorder_type, and does it indicate any recurring equipment issues for that specific type?","
+
+SELECT workorder_id, workorder_facility_code, workorder_createdtime FROM ai.workordermasterdetails WHERE workorder_facility_code IN (<facilitycode>) AND workorder_id = 'CFVZ-BAGG-MBPP-FFLR' LIMIT 100;",empty_result,0,,,arn:aws:bedrock:us-east-1:498398192936:inference-profile/us.meta.llama3-3-70b-instruct-v1:0,2026-06-16T09:43:27.809850+00:00,2026-06-22T09:24:52.720626+00:00
+f32389f90af200b0243a197a992058cc,132e9e9ac446bbd9,coromandel,1278,How many work order is mapped in Blue Star Limited vendor?,"
+
+SELECT workorder_id, workorder_equipment_name, workorder_equipment_code 
+FROM ai.workordermasterdetails 
+WHERE workorder_facility_code IN (<facilitycode>) 
+AND workorder_facility_name ILIKE '%CKKD-ESS-ABSS%' 
+LIMIT 10;",empty_result,0,,,arn:aws:bedrock:us-east-1:498398192936:inference-profile/us.meta.llama3-3-70b-instruct-v1:0,2026-06-16T09:26:59.626127+00:00,2026-06-22T09:24:52.720891+00:00
+84c097adc0bd1ff4ea3ae4a2983cab1a,09d85d0e6f836cda,coromandel,1278,Who is the Equipment owner of Work Order WO099990?,"
+
+SELECT workorder_equipment_owner FROM ai.workordermasterdetails WHERE workorder_id = 'CKKD-WO061384' AND workorder_facility_code in (<facilitycode>) LIMIT 100;",empty_result,0,,,arn:aws:bedrock:us-east-1:498398192936:inference-profile/us.meta.llama3-3-70b-instruct-v1:0,2026-06-16T09:17:46.803176+00:00,2026-06-22T09:24:52.721235+00:00
+66c0dd64b20f27061744eed675026122,8a724bc0b2d2acb1,coromandel,1278,Who is the Equipment owner of Work Order WO099990?,"
+
+SELECT workorder_equipment_owner FROM ai.workordermasterdetails WHERE workorder_id = 'CKKD-WO069430' AND workorder_facility_code in (<facilitycode>) LIMIT 100;",empty_result,0,,,arn:aws:bedrock:us-east-1:498398192936:inference-profile/us.meta.llama3-3-70b-instruct-v1:0,2026-06-16T09:17:00.782773+00:00,2026-06-22T09:24:52.721327+00:00
+1fe9eeb514f612e1fa54e2acc5c799a8,b1c42b6e168a4d37,coromandel,1278,Who is the WO owner of Work Order CHINP-WO0395658?,"
+
+SELECT workorder_createdby FROM ai.workordermasterdetails WHERE workorder_id = 'KNAN-WO003405' AND workorder_facility_code in (<facilitycode>) LIMIT 100;",execution_error,0,,,arn:aws:bedrock:us-east-1:498398192936:inference-profile/us.meta.llama3-3-70b-instruct-v1:0,2026-06-10T11:08:32.741902+00:00,2026-06-22T09:24:52.721593+00:00
+c27cdb87dcc216e8b4bb872f4196a435,69915efcf5501c7b,coromandel,1278,List WO in 'Consumable' Type.,"
+
+SELECT workorder_createdby FROM ai.workordermasterdetails WHERE workorder_id = 'KNAN-WO003405' AND workorder_facility_code IN (<facilitycode>) LIMIT 100;",execution_error,0,,,arn:aws:bedrock:us-east-1:498398192936:inference-profile/us.meta.llama3-3-70b-instruct-v1:0,2026-06-10T10:48:37.475185+00:00,2026-06-22T09:24:52.721688+00:00

@@ -1,0 +1,41 @@
+trace_id,span_id,project_name,user_id,span_name,failure_category,error_type,error_message,user_query,generated_sql,row_count,llm_model,timestamp,collected_at
+1fe9eeb514f612e1fa54e2acc5c799a8,a7f8250b4d604110,coromandel,1278,chat_chain,error,,422: SQL Execution Error: Undefined column 'None' in the query.,Who created this wo id = KNAN-WO003405,,,,2026-06-10T11:08:30.072064+00:00,2026-06-22T09:24:50.762769+00:00
+c27cdb87dcc216e8b4bb872f4196a435,3334de13d02396fa,coromandel,1278,chat_chain,error,,422: SQL Execution Error: Undefined column 'None' in the query.,Who created this wo id = KNAN-WO003405,,,,2026-06-10T10:48:35.093924+00:00,2026-06-22T09:24:50.762819+00:00
+35221130092fb9724aa88e8792c7a989,25c3af31cef58ab8,coromandel,1278,chat_chain,error,,For the user: '1278' in 'coromandel'. No quota is assigned,hi,,,,2026-06-10T10:41:33.839514+00:00,2026-06-22T09:24:50.762850+00:00
+8314559ad264298ef644a39ad64af814,79aca7da5175e4f8,coromandel,1278,chat_chain,error,,For the user: '1278' in 'coromandel'. No quota is assigned,hi,,,,2026-06-10T10:13:47.835185+00:00,2026-06-22T09:24:50.762877+00:00
+bed8ab7eb29edca7fb144683e39a1a76,34ee2ac801d12de5,coromandel,1278,3. sql_generation,empty_result,,,What is the count of work orders approved in 2025?,"
+
+SELECT 
+workorder_id,
+workorder_facility_code,
+workorder_equipment_code,
+workorder_equipment_name
+FROM 
+ai.workordermasterdetails 
+WHERE 
+workorder_facility_code IN (<facilitycode>)
+AND workorder_createdtime::date = '2026-06-04'
+AND workorder_facility_name = 'CFVZ-GARG'
+LIMIT 100;",0.0,arn:aws:bedrock:us-east-1:498398192936:inference-profile/us.meta.llama3-3-70b-instruct-v1:0,2026-06-16T10:04:55.420817+00:00,2026-06-22T09:24:52.723109+00:00
+3a9577de8685ed4a084fc474d97902f7,4d13b9f45a91747a,coromandel,1278,3. sql_generation,empty_result,,,"How does the workorder_equipment_code in CHINP-WO0395658 align with the workorder_category and workorder_type, and does it indicate any recurring equipment issues for that specific type?","
+
+SELECT workorder_id, workorder_facility_code, workorder_createdtime FROM ai.workordermasterdetails WHERE workorder_facility_code IN (<facilitycode>) AND workorder_id = 'CFVZ-BAGG-MBPP-FFLR' LIMIT 100;",0.0,arn:aws:bedrock:us-east-1:498398192936:inference-profile/us.meta.llama3-3-70b-instruct-v1:0,2026-06-16T09:43:27.809850+00:00,2026-06-22T09:24:52.723196+00:00
+f32389f90af200b0243a197a992058cc,132e9e9ac446bbd9,coromandel,1278,3. sql_generation,empty_result,,,How many work order is mapped in Blue Star Limited vendor?,"
+
+SELECT workorder_id, workorder_equipment_name, workorder_equipment_code 
+FROM ai.workordermasterdetails 
+WHERE workorder_facility_code IN (<facilitycode>) 
+AND workorder_facility_name ILIKE '%CKKD-ESS-ABSS%' 
+LIMIT 10;",0.0,arn:aws:bedrock:us-east-1:498398192936:inference-profile/us.meta.llama3-3-70b-instruct-v1:0,2026-06-16T09:26:59.626127+00:00,2026-06-22T09:24:52.723274+00:00
+84c097adc0bd1ff4ea3ae4a2983cab1a,09d85d0e6f836cda,coromandel,1278,3. sql_generation,empty_result,,,Who is the Equipment owner of Work Order WO099990?,"
+
+SELECT workorder_equipment_owner FROM ai.workordermasterdetails WHERE workorder_id = 'CKKD-WO061384' AND workorder_facility_code in (<facilitycode>) LIMIT 100;",0.0,arn:aws:bedrock:us-east-1:498398192936:inference-profile/us.meta.llama3-3-70b-instruct-v1:0,2026-06-16T09:17:46.803176+00:00,2026-06-22T09:24:52.723351+00:00
+66c0dd64b20f27061744eed675026122,8a724bc0b2d2acb1,coromandel,1278,3. sql_generation,empty_result,,,Who is the Equipment owner of Work Order WO099990?,"
+
+SELECT workorder_equipment_owner FROM ai.workordermasterdetails WHERE workorder_id = 'CKKD-WO069430' AND workorder_facility_code in (<facilitycode>) LIMIT 100;",0.0,arn:aws:bedrock:us-east-1:498398192936:inference-profile/us.meta.llama3-3-70b-instruct-v1:0,2026-06-16T09:17:00.782773+00:00,2026-06-22T09:24:52.723426+00:00
+1fe9eeb514f612e1fa54e2acc5c799a8,b1c42b6e168a4d37,coromandel,1278,3. sql_generation,error,,HTTPException: 422: SQL Execution Error: Undefined column 'None' in the query.,Who is the WO owner of Work Order CHINP-WO0395658?,"
+
+SELECT workorder_createdby FROM ai.workordermasterdetails WHERE workorder_id = 'KNAN-WO003405' AND workorder_facility_code in (<facilitycode>) LIMIT 100;",,arn:aws:bedrock:us-east-1:498398192936:inference-profile/us.meta.llama3-3-70b-instruct-v1:0,2026-06-10T11:08:32.741902+00:00,2026-06-22T09:24:52.723509+00:00
+c27cdb87dcc216e8b4bb872f4196a435,69915efcf5501c7b,coromandel,1278,3. sql_generation,error,,HTTPException: 422: SQL Execution Error: Undefined column 'None' in the query.,List WO in 'Consumable' Type.,"
+
+SELECT workorder_createdby FROM ai.workordermasterdetails WHERE workorder_id = 'KNAN-WO003405' AND workorder_facility_code IN (<facilitycode>) LIMIT 100;",,arn:aws:bedrock:us-east-1:498398192936:inference-profile/us.meta.llama3-3-70b-instruct-v1:0,2026-06-10T10:48:37.475185+00:00,2026-06-22T09:24:52.723587+00:00

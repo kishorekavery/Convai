@@ -21,7 +21,7 @@ The application codebase is organized as follows:
 - **`routers/`** - API route controllers defining endpoint request/response contracts and pipeline filters.
   - [routers/llm_inference.py](routers/llm_inference.py): Post-request route `/AI/chat-completion` handling token checks, routing user inputs through intent classification, generating/running SQL, and returning a streaming response.
   - [routers/user_quota_limiter.py](routers/user_quota_limiter.py): Quota check middleware verifying that the user is registered and has sufficient token usage balance remaining in the database.
-  - [routers/rate_limiters.py](routers/rate_limiters.py): Rate limiting middleware matching the logic of the user quota checks.
+  - [routers/deprecated/rate_limiters.py](routers/deprecated/rate_limiters.py): (Deprecated) Rate limiting middleware matching the logic of the user quota checks.
   - [routers/get_logs.py](routers/get_logs.py): Helper API router to read and retrieve application logs.
 - **`agents/`** - Domain agents implementing LLM instructions.
   - [agents/intent_classification_agent.py](agents/intent_classification_agent.py): Determines whether user queries map to SQL databases, simple greetings, or fall out of bounds (rejections).
@@ -59,7 +59,7 @@ flowchart TD
 
     subgraph FastAPI["FastAPI Service (main.py — port 8000)"]
         MW["User Quota Middleware\n(user_quota_limiter.py)"]
-        
+
         subgraph Pipeline["LLM Inference Pipeline (llm_inference.py)"]
             IC["1. Intent Classification\nagents/intent_classification_agent.py"]
             EG["2. Embedding Generation\nmodels/embedding_model.py"]
@@ -67,7 +67,7 @@ flowchart TD
             SQL["4. SQL Generation + Execution\nagents/sql_agent.py"]
             FR["5. Final Response (Streaming)\nmodels/text_generation_model.py"]
         end
-        
+
         LOGS["GET /AI/get-log\nrouters/get_logs.py"]
     end
 
@@ -113,20 +113,19 @@ flowchart TD
 
 ### Key Components
 
-| Component | Responsibility |
-| :--- | :--- |
-| **FastAPI** | Async HTTP server, request routing, and lifecycle management. |
-| **Quota Middleware** | Validates the user, checks token balance before executing queries, and enforces rate limits. |
-| **Intent Classifier** | Routes requests: identifies if a query is a database query (SQL pipeline), a simple greeting, or invalid. |
+| Component                      | Responsibility                                                                                                |
+| :----------------------------- | :------------------------------------------------------------------------------------------------------------ |
+| **FastAPI**                    | Async HTTP server, request routing, and lifecycle management.                                                 |
+| **Quota Middleware**           | Validates the user, checks token balance before executing queries, and enforces rate limits.                  |
+| **Intent Classifier**          | Routes requests: identifies if a query is a database query (SQL pipeline), a simple greeting, or invalid.     |
 | **Embedding & Knowledge Base** | Converts user query to dense vector embeddings and retrieves relevant database schemas and few-shot examples. |
-| **SQL Agent** | Generates database-specific PostgreSQL queries via LLM and executes them against the pool. |
-| **Streaming Response** | Streams the final natural language answer back to the client, updating database token usage upon success. |
-| **Arize Phoenix** | Receives OTel traces to visualize latency, tokens, spans, and LLM prompt execution. |
+| **SQL Agent**                  | Generates database-specific PostgreSQL queries via LLM and executes them against the pool.                    |
+| **Streaming Response**         | Streams the final natural language answer back to the client, updating database token usage upon success.     |
+| **Arize Phoenix**              | Receives OTel traces to visualize latency, tokens, spans, and LLM prompt execution.                           |
 
 ---
 
 ## Project Commands
-
 
 Install vector extension in the schema where vector similarity search will be done
 

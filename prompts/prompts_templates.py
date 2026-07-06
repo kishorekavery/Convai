@@ -21,8 +21,9 @@ def format_sql_prompt(
         formatted_prompt (str)
     """
 
-    prompt = f"""<|begin_of_text|>
-<|start_header_id|>system<|end_header_id|>
+    prompt = f"""
+
+#System Prompt
 You are an AI assistant specialized in generating PostgreSQL queries based strictly on the provided table schema.
 
 ## Instructions:
@@ -63,9 +64,11 @@ Short Form | Full Text (to use in SQL)
 ##chat_history:##
 {chat_history}
 
-Generate an SQL query based on the user’s request.<|eot_id|>
-<|start_header_id|>user<|end_header_id|>{user_input}<|eot_id|>
-<|start_header_id|>assistant<|end_header_id|>"""
+Generate an SQL query based on the user’s request.
+
+##USER QUERY:\n
+{user_input}\n
+##ASSISTANT:\n"""
 
     return prompt
 
@@ -176,8 +179,8 @@ def format_response_to_user_prompt(
     #     return prompt
 
     ## Prompt Version 5
-    prompt = f"""<|begin_of_text|>
-<|start_header_id|>system<|end_header_id|>You are MaintWiz AI, a helpful AI assistant answering user queries strictly based on the fetched data.
+    prompt = f""" #SYSTEM PROMPT
+You are MaintWiz AI, a helpful AI assistant answering user queries strictly based on the fetched data.
 
 ## Instructions: ##
 - Structure responses clearly, concisely and professional, ensuring all relevant data is utilized effectively and and is aligned with the format of previous examples. 
@@ -213,9 +216,11 @@ def format_response_to_user_prompt(
 ## Chat History: ##
 {chat_history}
 
-Respond to the user's query based strictly on the available data.<|eot_id|>
-<|start_header_id|>user<|end_header_id|>{user_input}<|eot_id|>
-<|start_header_id|>assistant<|end_header_id|>
+Respond to the user's query based strictly on the available data.
+
+#USER QUERY:\n
+{user_input}
+#ASSISTANT:\n
 """
 
     return prompt
@@ -230,8 +235,7 @@ def format_classification_prompt(user_input: str = "", chat_history: str = "") -
         formatted_prompt (str)
     """
 
-    prompt = f"""<|begin_of_text|>
-<|start_header_id|>system<|end_header_id|>You are MaintWiz AI, a classification assistant responsible for routing user input correctly.
+    prompt = f""" You are MaintWiz AI, a classification assistant responsible for routing user input correctly.
 
 ## Your Responsibilities: ##
 Classify the user's message as one of:
@@ -278,9 +282,8 @@ User: "Can you tell me a joke?"
 ##Chat History##
 {chat_history}
 
-Now classify the user input below keeping the context from the past user queries(provided in the descending order):<|eot_id|>
-<|start_header_id|>user<|end_header_id|>{user_input}<|eot_id|>
-<|start_header_id|>assistant<|end_header_id|>
-"""
+Now classify the user input below keeping the context from the past user queries(provided in the descending order):
+#USER QUERY:\n{user_input}
+#ASSISTANT:\n"""
 
     return prompt

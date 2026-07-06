@@ -15,9 +15,9 @@ logging = get_logger(__name__)
 
 
 class ChatModel(BedrockClient):
-    def __init__(self):
+    def __init__(self, model_id=CHAT_MODEL_ID):
         super().__init__(
-            model_id=CHAT_MODEL_ID,
+            model_id=model_id,
             contentType=CHAT_MODEL_CONTENT_TYPE,
             accept=CHAT_MODEL_ACCEPT,
         )
@@ -60,7 +60,7 @@ class ChatModel(BedrockClient):
 
         ## log as Text
         logging.info(
-            "Llama Model (Non Streaming) Inference Log:\nPrompt: %s\nAI Response : %s\n\nInvocation Metrics:\nPrompt Token Count: %s\nOuput Token Count: %s\nReasong for Stopping: %s\nInvocation Processing Time: %s",
+            "Llama Model (Non Streaming) Inference Log:\nPrompt: %s\nAI Response : %s\n\nInvocation Metrics:\nPrompt Token Count: %s\nOuput Token Count: %s\nReason for Stopping: %s\nInvocation Processing Time: %s",
             str(prompt),
             str(response_text),
             str(prompt_tokens),

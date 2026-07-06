@@ -1,6 +1,5 @@
 from pydantic import BaseModel, field_validator
 
-
 # Request Schema
 class ChatCompletionRequest(BaseModel):
     database_name: str
@@ -36,14 +35,17 @@ class ChatCompletionRequest(BaseModel):
         if not value.strip():
             raise ValueError("User ID must not be empty")
         return value
-
+    
     @field_validator("facm_code")
     @classmethod
     def facm_code_no_value(cls, value):
         if len(value) == 0:
             raise ValueError("Facility code must not be empty")
-        return value
-
+        # Check if any of the items in the list are empty or just whitespace
+        for code in value:
+            if not code.strip():
+                raise ValueError("Facility codes inside the list must not be blank")
+        return value 
 
 if __name__ == "__main__":
     # Test Cases

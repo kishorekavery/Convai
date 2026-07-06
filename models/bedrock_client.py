@@ -31,11 +31,38 @@ class BedrockClient:
     def invoke_model(self, payload: dict):
         """Generic method to invoke an AWS Bedrock model."""
         try:
+            # 1. Format payload according to specific model provider requirements
+            if "embed" in self.model_id:
+                body = payload
+            else:
+                prompt = payload.get("prompt")
+                if "anthropic" in self.model_id:
+                    body = {
+                        "anthropic_version": "bedrock-2023-05-31",
+                        "max_tokens": payload.get("max_gen_len", 100),
+                        "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
+                    }
+                elif "meta" in self.model_id:
+                    body = payload
+                elif "amazon" in self.model_id:
+                    body = {
+                        "inferenceConfig": {"max_new_tokens": payload.get("max_gen_len", 100)},
+                        "messages": [{"role": "user", "content": [{"text": prompt}]}]
+                    }
+                elif "google" in self.model_id:
+                    body = {
+                        "messages": [{"role": "user", "content": prompt}],
+                        "max_tokens": payload.get("max_gen_len", 100),
+                        "temperature": payload.get("temperature", 0.5)
+                    }
+                else:
+                    body = payload
+
             response = self.client.invoke_model(
                 modelId=self.model_id,
                 contentType=self.contentType,
                 accept=self.accept,
-                body=json.dumps(payload),
+                body=json.dumps(body),
             )
             content = json.loads(response["body"].read())
 
@@ -43,6 +70,24 @@ class BedrockClient:
                 logging.info(f"AWS Bedrock Non Streaming Response: {response}")
                 logging.error("Failed to retrieve body from response.")
                 raise RuntimeError("No body data returned by AWS Bedrock.")
+
+            # 3. Parse and extract output payload 
+            # Injecting into the "generation" key to maintain compatibility with existing app models
+            if "embed" not in self.model_id:
+                if "anthropic" in self.model_id:
+                    content["generation"] = content["content"][0]["text"]
+                elif "amazon" in self.model_id:
+                    content["generation"] = content["output"]["message"]["content"][0]["text"]
+                elif "google" in self.model_id:
+                    content["generation"] = content["choices"][0]["message"]["content"]
+                elif "meta" in self.model_id:
+                    # Llama models typically return the text directly in the "generation" key natively
+                    content["generation"] = content.get("generation", "")
+
+            # 4. Extract Token counts from AWS Bedrock headers
+            headers = response.get("ResponseMetadata", {}).get("HTTPHeaders", {})
+            content["prompt_token_count"] = int(headers.get("x-amzn-bedrock-input-token-count", 0))
+            content["generation_token_count"] = int(headers.get("x-amzn-bedrock-output-token-count", 0))
 
             return content
 
@@ -86,40 +131,84 @@ class BedrockClient:
         try:
             start_time = time()
 
+            # 1. Format payload according to specific model provider requirements
+            if "embed" in self.model_id:
+                body = payload
+            else:
+                prompt = payload.get("prompt")
+                if "anthropic" in self.model_id:
+                    body = {
+                        "anthropic_version": "bedrock-2023-05-31",
+                        "max_tokens": payload.get("max_gen_len", 100),
+                        "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
+                    }
+                elif "meta" in self.model_id:
+                    body = payload
+                elif "amazon" in self.model_id:
+                    body = {
+                        "inferenceConfig": {"max_new_tokens": payload.get("max_gen_len", 100)},
+                        "messages": [{"role": "user", "content": [{"text": prompt}]}]
+                    }
+                elif "google" in self.model_id:
+                    body = {
+                        "messages": [{"role": "user", "content": prompt}],
+                        "max_tokens": payload.get("max_gen_len", 100),
+                        "temperature": payload.get("temperature", 0.5)
+                    }
+                else:
+                    body = payload
+
             response = self.client.invoke_model_with_response_stream(
                 modelId=self.model_id,
                 contentType=self.contentType,
                 accept=self.accept,
-                body=json.dumps(payload),
+                body=json.dumps(body),
             )
             stream = response.get("body")
             streamed_response = ""
+            final_invocation_metrics = None
 
             if stream:
                 for event in stream:
-                    # logging.info("Event: %s", event)
                     chunk = event.get("chunk")
-                    # logging.info("Chunk: %s", chunk)
                     if chunk:
                         chunk_json = json.loads(chunk.get("bytes").decode())
-                        # logging.info("Chunk JSON: %s", chunk_json)
-                        invocation_metrics = chunk_json.get(
-                            "amazon-bedrock-invocationMetrics", None
-                        )
-                        streamed_chunk = chunk_json.get("generation")
-                        streamed_response += streamed_chunk
-                        yield streamed_chunk
+                        
+                        # Fix: Safely extract metrics without overwriting previous chunks
+                        metrics = chunk_json.get("amazon-bedrock-invocationMetrics")
+                        if metrics:
+                            final_invocation_metrics = metrics
+
+                        # Parse streamed chunk based on provider
+                        streamed_chunk = ""
+                        if "anthropic" in self.model_id:
+                            if chunk_json.get("type") == "content_block_delta":
+                                streamed_chunk = chunk_json.get("delta", {}).get("text", "")
+                        elif "amazon" in self.model_id:
+                            if "contentBlockDelta" in chunk_json:
+                                streamed_chunk = chunk_json["contentBlockDelta"].get("delta", {}).get("text", "")
+                        elif "google" in self.model_id:
+                            choices = chunk_json.get("choices", [])
+                            if choices and "delta" in choices[0]:
+                                streamed_chunk = choices[0]["delta"].get("content", "")
+                        else:
+                            # Fallback (e.g., Meta Llama)
+                            streamed_chunk = chunk_json.get("generation", "")
+
+                        if streamed_chunk:
+                            streamed_response += streamed_chunk
+                            yield streamed_chunk
             else:
                 logging.info(f"AWS Bedrock Streaming Response: {response}")
                 logging.error("Failed to retrieve stream body from response.")
                 raise RuntimeError("No stream body data returned by AWS Bedrock.")
 
-            if invocation_metrics:
+            if final_invocation_metrics:
                 invocation_processing_time = time() - start_time
-                inputTokenCount = str(invocation_metrics.get("inputTokenCount"))
-                outputTokenCount = str(invocation_metrics.get("outputTokenCount"))
-                invocationLatency = str(invocation_metrics.get("invocationLatency"))
-                firstByteLatency = str(invocation_metrics.get("firstByteLatency"))
+                inputTokenCount = str(final_invocation_metrics.get("inputTokenCount", 0))
+                outputTokenCount = str(final_invocation_metrics.get("outputTokenCount", 0))
+                invocationLatency = str(final_invocation_metrics.get("invocationLatency", 0))
+                firstByteLatency = str(final_invocation_metrics.get("firstByteLatency", 0))
                 total_token = int(inputTokenCount) + int(outputTokenCount)
                 output_response = str(streamed_response)
 
@@ -132,7 +221,7 @@ class BedrockClient:
                 )
 
                 logging.info(
-                    "Model Invoke (Streaming) Inference Log:\nPrompt: %s\nAI Response : %s\n\nInvocation Metrics:\nPrompt Token Count: %s\nOuput Token Count: %s\nReasong for Stopping: %s\nInvocation Latency: %s\nFirst Byte Latency: %s\nInvocation Processing Time: %s",
+                    "Model Invoke (Streaming) Inference Log:\nPrompt: %s\nAI Response : %s\n\nInvocation Metrics:\nPrompt Token Count: %s\nOuput Token Count: %s\n Reason for Stopping: %s\nInvocation Latency: %s\nFirst Byte Latency: %s\nInvocation Processing Time: %s",
                     str(payload.get("prompt")),
                     output_response,
                     inputTokenCount,

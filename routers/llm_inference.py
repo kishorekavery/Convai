@@ -35,11 +35,11 @@ from prompts import format_sql_prompt, format_response_to_user_prompt
 ## Initiate the models
 from models import TitanEmbeddingModel
 from models import ChatModel
+from config import SQL_MODEL_ID, CHAT_MODEL_ID
 from agents import sql_agent
 from agents import intent_classification
 
 # Custom Implementation of Starlette StreamingResponse Class
-# pyrefly: ignore [missing-import]
 from responses import StreamingResponse
 
 
@@ -247,7 +247,8 @@ async def chat_completion(
         logging.info("Proceeding with SQL model call.")
 
         embedding_model = TitanEmbeddingModel()
-        text_generation_model = ChatModel()
+        sql_generation_model = ChatModel(model_id=SQL_MODEL_ID)
+        chat_generation_model = ChatModel(model_id=CHAT_MODEL_ID)
     
     ## --------------------------------------------------------------------------------------------------- #
     ##    Generate Vector of the user input
@@ -325,7 +326,7 @@ async def chat_completion(
                 "llm.input_messages.0.message.content":  str(sql_generation_prompt)
             })
 
-            table_rows = await sql_agent(start_time, sql_generation_prompt, pool, text_generation_model, span3, loop, trace, facm_code)
+            table_rows = await sql_agent(start_time, sql_generation_prompt, pool, sql_generation_model, span3, loop, trace, facm_code)
             
             span3.set_status(Status(StatusCode.OK))
 
@@ -410,7 +411,7 @@ async def chat_completion(
                     def producer():
                         with trace.use_span(span4):
                             try:
-                                for chunk in text_generation_model.generate_stream_response(response_to_user_prompt, span4):
+                                for chunk in chat_generation_model.generate_stream_response(response_to_user_prompt, span4):
                                     loop.call_soon_threadsafe(queue.put_nowait, chunk)
                             finally:
                                 loop.call_soon_threadsafe(queue.put_nowait, None)  # signal end of stream

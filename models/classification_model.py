@@ -60,7 +60,7 @@ class ClassificationModel(BedrockClient):
 
         ## log as Text
         logging.info(
-            "Classification Model (Non Streaming) Inference Log:\nPrompt: %s\nAI Response : %s\n\nInvocation Metrics:\nPrompt Token Count: %s\nOuput Token Count: %s\nReasong for Stopping: %s\nInvocation Processing Time: %s",
+            "Classification Model (Non Streaming) Inference Log:\nPrompt: %s\nAI Response : %s\n\nInvocation Metrics:\nPrompt Token Count: %s\nOuput Token Count: %s\nReason for Stopping: %s\nInvocation Processing Time: %s",
             str(prompt),
             str(response_text),
             str(prompt_tokens),
