@@ -2,6 +2,10 @@
 
 from .db_connection import connect_to_db as connect_to_db
 from .db_connection import validate_database as validate_database
+from .db_connection import check_db_connection as check_db_connection
+
+from .pool_manager import get_pool as get_pool
+from .pool_manager import close_all_pools as close_all_pools
 
 from .db_queries import (
     CHECK_IF_USER_QUOTA_LIMIT_EXISTS as CHECK_IF_USER_QUOTA_LIMIT_EXISTS,

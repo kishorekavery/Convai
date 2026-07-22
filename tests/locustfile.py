@@ -1,41 +1,35 @@
+import locust
 from locust import HttpUser, task, between
-import json
 import random
 
-
-class ChatCompletionUser(HttpUser):
-    host = "http://localhost:8000"
-    wait_time = between(0.1, 1)  # seconds between requests
+class ConvAIUser(HttpUser):
+    # Simulate a user waiting between 1 to 5 seconds before sending their next message
+    wait_time = between(1, 5)
 
     @task
-    def chat_completion(self):
-
-        db_name = random.choice(["parry", "yokohama", "tpmdemo"])
-
-        if db_name == "parry":
-            facm_code = ["DRYING SECTION"]
-
-        if db_name == "yokohama":
-            facm_code = ["ATC-GJ-CURG"]
-
-        if db_name == "tpmdemo":
-            facm_code = ["ATC-GJ-CURG"]
-
+    def test_chat_completion(self):
+        # We can randomize user IDs to simulate different users hitting the DB
+        simulated_user_id = str(random.randint(1, 100))
+        
         payload = {
-            "database_name": db_name,
-            "user_input": "List top 10 workorders",
-            "user_id": "1",
-            "facm_code": facm_code,
-            "chat_history": "",
+            "database_name": "test_db",          # Replace with a valid test DB name
+            "user_id": simulated_user_id,
+            "user_input": "Show me the latest production data", 
+            "facm_code": ["facility_1"],         # Replace with valid facility codes
+            "chat_history": ""
         }
+        
+        # Hit your inference endpoint
+        # Because your API streams the response back, we set stream=True
+        with self.client.post("/AI/chat-completion", json=payload, stream=True, catch_response=True) as response:
+            if response.status_code == 200:
+                # Optional: Read the streaming chunks
+                for chunk in response.iter_content(chunk_size=None):
+                    pass
+                response.success()
+            else:
+                response.failure(f"Failed with status code: {response.status_code}")
 
-        headers = {"Content-Type": "application/json"}
-
-        # If using HTTP, include http://
-        self.client.post(
-            "/AI/chat-completion", data=json.dumps(payload), headers=headers
-        )
-
-
-# Run with:
-# locust -f locustfile.py --host=http://maintverse.com:8000
+# locust -f locustfile.py --run in cmd (use at your own risk, use in a private network or with permission)
+# 
+# locust --host=http://localhost:8000

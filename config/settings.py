@@ -8,8 +8,14 @@ DB_USERNAME = os.getenv("DB_USERNAME")
 DB_PASSWORD = os.getenv("DB_PASSWORD")
 DB_HOST = os.getenv("DB_HOST")
 DB_PORT = os.getenv("DB_PORT")
-DB_MIN_CONN = 2
-DB_MAX_CONN = 5
+# Per-database connection pool sizing (one shared pool per database, per worker).
+# Budget constraint to respect:
+#   WEB_CONCURRENCY x (num_client_dbs + 1 knowledgebase) x DB_MAX_CONN
+#       <= Postgres max_connections
+# For many tenants / high worker counts, raise Postgres max_connections or use
+# PgBouncer.
+DB_MIN_CONN = int(os.getenv("DB_MIN_CONN", "2"))
+DB_MAX_CONN = int(os.getenv("DB_MAX_CONN", "10"))
 KNOWLEDGEBASE_DATABASE_NAME = "maintwiz"
 KNOWLEDGEBASE_SCHEMA_NAME = "ai"
 
@@ -27,6 +33,11 @@ EMBEDDING_MODEL_ID = os.getenv("BEDROCK_MODEL_ID_TITAN")
 CHAT_MODEL_ID = os.getenv("BEDROCK_MODEL_ID_CHAT", os.getenv("BEDROCK_MODEL_ID_LLAMA"))
 SQL_MODEL_ID = os.getenv("BEDROCK_MODEL_ID_SQL", os.getenv("BEDROCK_MODEL_ID_LLAMA"))
 CLASSIFICATION_MODEL_ID = os.getenv("BEDROCK_MODEL_ID_CLASSIFICATION")
+# Model used to *judge* groundedness/correctness in the evals/ suite. Should be a
+# different model family than CHAT_MODEL_ID/SQL_MODEL_ID (e.g. a Claude Bedrock
+# inference profile) to avoid self-grading bias. Falls back to CHAT_MODEL_ID so
+# the eval suite still runs out of the box if it isn't configured.
+JUDGE_MODEL_ID = os.getenv("BEDROCK_MODEL_ID_JUDGE", CHAT_MODEL_ID)
 AWS_ACCESS_KEY = os.getenv("AWS_ACCESS_KEY")
 AWS_SECRET_KEY = os.getenv("AWS_SECRET_KEY")
 

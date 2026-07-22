@@ -1,9 +1,18 @@
+import sys
+from pathlib import Path
+
+# Add project root to sys.path to allow running this script directly
+project_root = str(Path(__file__).resolve().parents[1])
+if project_root not in sys.path:
+    sys.path.append(project_root)
+
 from fastapi import HTTPException, status
 from asyncpg import Pool, create_pool, PostgresError
+import asyncio
 
 ## Internal Packages
 from config import get_logger
-from config import DB_HOST, DB_PORT, DB_USERNAME, DB_PASSWORD, DB_MIN_CONN, DB_MAX_CONN
+from config import DB_HOST, DB_PORT, DB_USERNAME, DB_PASSWORD, DB_MIN_CONN, DB_MAX_CONN, KNOWLEDGEBASE_DATABASE_NAME
 
 logging = get_logger(__name__)
 
@@ -72,13 +81,16 @@ async def validate_database(database_name):
 
     pool = await connect_to_db("postgres")
 
-    async with pool.acquire() as conn:
-        database_exists = (
-            await conn.fetchval(
-                "SELECT 1 FROM pg_database WHERE datname = $1;", database_name
+    try:
+        async with pool.acquire() as conn:
+            database_exists = (
+                await conn.fetchval(
+                    "SELECT 1 FROM pg_database WHERE datname = $1;", database_name
+                )
+                is not None
             )
-            is not None
-        )
+    finally:
+        await pool.close()
 
     if not database_exists:
         logging.error(
@@ -90,7 +102,52 @@ async def validate_database(database_name):
         )
 
 
-# if __name__ == "__main__":
-#     async def main():
-#         await validate_database("maintwiz")
-#     asyncio.run(main())
+async def check_db_connection(database_name: str = None) -> bool:
+    """
+    Checks if the database is reachable by establishing a connection pool,
+    acquiring a connection, and executing a simple test query.
+
+    Args:
+        database_name (str, optional): Name of the database to check.
+                                       Defaults to KNOWLEDGEBASE_DATABASE_NAME.
+
+    Returns:
+        bool: True if connection check succeeds, False otherwise.
+    """
+    db_name = database_name or KNOWLEDGEBASE_DATABASE_NAME
+    logging.info("Initiating database connection check for: %s", db_name)
+    pool = None
+    success = False
+    try:
+        pool = await connect_to_db(db_name)
+        async with pool.acquire() as conn:
+            res = await conn.fetchval("SELECT 1;")
+            if res == 1:
+                logging.info("Database connection check successful for database: %s", db_name)
+                success = True
+            else:
+                logging.error("Database connection check failed: unexpected query result %s", res)
+    except Exception as e:
+        logging.error("Database connection check failed for database %s: %s", db_name, str(e))
+    finally:
+        if pool is not None:
+            await pool.close()
+    return success
+
+
+if __name__ == "__main__":
+    async def main():
+        # Validate that the database exists
+        print(f"Validating if database '{KNOWLEDGEBASE_DATABASE_NAME}' exists...")
+        await validate_database(KNOWLEDGEBASE_DATABASE_NAME)
+        print("Database validation succeeded.")
+
+        # Check database connection
+        print(f"Checking database connection to '{KNOWLEDGEBASE_DATABASE_NAME}'...")
+        success = await check_db_connection(KNOWLEDGEBASE_DATABASE_NAME)
+        if success:
+            print("Database connection check succeeded!")
+        else:
+            print("Database connection check failed.")
+
+    asyncio.run(main())

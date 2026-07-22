@@ -7,6 +7,7 @@ class ChatCompletionRequest(BaseModel):
     user_id: str
     facm_code: list[str]
     chat_history: str
+    eval_mode: bool = False
 
     @field_validator("database_name")
     @classmethod

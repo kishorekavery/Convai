@@ -5,7 +5,7 @@ from openinference.semconv.trace import SpanAttributes, OpenInferenceSpanKindVal
 
 from config import get_logger
 
-from database import connect_to_db
+from database import get_pool
 from database import CHECK_IF_USER_QUOTA_LIMIT_EXISTS, CHECK_IF_USER_QUOTA_LEFT
 
 from models import ChatCompletionRequest
@@ -21,7 +21,7 @@ async def user_quota_limiter(request: ChatCompletionRequest, tracer, parent_span
         facm_code = request.facm_code
         database_name = request.database_name
 
-        pool = await connect_to_db(database_name)
+        pool = await get_pool(database_name)
 
         parent_span.set_attributes({SpanAttributes.INPUT_VALUE: user_input})
 

@@ -1,5 +1,6 @@
 from fastapi import HTTPException, status, APIRouter, Depends
 from fastapi import Response
+from fastapi.responses import JSONResponse
 import time
 from tabulate import tabulate
 import asyncio
@@ -14,7 +15,7 @@ from opentelemetry.sdk.trace import SpanProcessor
 from opentelemetry.sdk.resources import Resource
 from openinference.semconv.resource import ResourceAttributes
 from openinference.instrumentation.bedrock import BedrockInstrumentor
-from openinference.semconv.trace import SpanAttributes, OpenInferenceSpanKindValues
+from openinference.semconv.trace import SpanAttributes, DocumentAttributes, OpenInferenceSpanKindValues
 from phoenix.otel import register
 
 ## Internal Packages
@@ -22,7 +23,7 @@ from phoenix.otel import register
 
 from config import get_logger
 from config import EMBEDDING_MODEL_ID, CHAT_MODEL_ID, CLASSIFICATION_MODEL_ID
-from config import COLLECTOR_ENDPOINT, COLLECTOR_PROJECT_NAME, PHOENIX_API_KEY
+from config import COLLECTOR_ENDPOINT, COLLECTOR_PROJECT_NAME, PHOENIX_API_KEY, PHOENIX_BATCH
 
 from routers import user_quota_limiter
 from database import fetch_context, fetch_user_details
@@ -31,6 +32,7 @@ from database import UPDATE_USER_QUOTA_USAGE
 from dataprocessing import get_last_and_current_user_query, get_last_n_user_queries
 from models import ChatCompletionRequest
 from prompts import format_sql_prompt, format_response_to_user_prompt
+from prompts import format_large_volume_refine_prompt
 
 ## Initiate the models
 from models import TitanEmbeddingModel
@@ -45,11 +47,26 @@ from responses import StreamingResponse
 
 ## Initiate Logger
 logging = get_logger(__name__)
+
+
+def _split_context_examples(context: str) -> list:
+    """
+    Split the concatenated 'Example N - ...' few-shot context (built in
+    database/db_queries.py::fetch_context, blocks separated by a blank line)
+    back into individual example strings for per-document retrieval tracing.
+    """
+
+    if not context:
+        return []
+    return [block.strip() for block in context.split("\n\n") if block.strip()]
+
+
 ## ---- Arize Phoenix Tracer Setup  ------------------------------------------------------------------------------------------------------- #
 
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.resources import Resource
 from phoenix.otel.otel import SimpleSpanProcessor as PhoenixSimpleSpanProcessor
+from phoenix.otel.otel import BatchSpanProcessor as PhoenixBatchSpanProcessor
 from opentelemetry import trace as otel_trace
 
 tracer_provider = TracerProvider(
@@ -74,16 +91,34 @@ class DynamicProjectProcessor(SpanProcessor):
             dynamic_resource = Resource.create({ResourceAttributes.PROJECT_NAME: db_name})
             span._resource = span.resource.merge(dynamic_resource)
 
-# 1. Add DynamicProjectProcessor FIRST so it runs before the exporter
+# 1. Add DynamicProjectProcessor FIRST so it runs before the exporter.
+#    Its on_end mutates span._resource synchronously at span end, before the
+#    exporter processor (below) reads/enqueues the span - so per-tenant project
+#    routing is preserved under both Simple and Batch processors.
 tracer_provider.add_span_processor(DynamicProjectProcessor())
 
-# 2. Add the Phoenix Exporter SECOND
-tracer_provider.add_span_processor(
-    PhoenixSimpleSpanProcessor(
-        endpoint=COLLECTOR_ENDPOINT,
-        headers={"Authorization": f"Bearer {PHOENIX_API_KEY}"} if PHOENIX_API_KEY else {}
-    )
+# 2. Add the Phoenix exporter SECOND.
+#    BatchSpanProcessor (default, gated by PHOENIX_BATCH) buffers spans and
+#    exports them on a background thread, keeping the blocking HTTP export off
+#    the request path / event loop. SimpleSpanProcessor exports synchronously on
+#    every span.end() and is kept only as an opt-out for debugging.
+_phoenix_exporter_headers = (
+    {"Authorization": f"Bearer {PHOENIX_API_KEY}"} if PHOENIX_API_KEY else {}
 )
+if PHOENIX_BATCH:
+    tracer_provider.add_span_processor(
+        PhoenixBatchSpanProcessor(
+            endpoint=COLLECTOR_ENDPOINT,
+            headers=_phoenix_exporter_headers,
+        )
+    )
+else:
+    tracer_provider.add_span_processor(
+        PhoenixSimpleSpanProcessor(
+            endpoint=COLLECTOR_ENDPOINT,
+            headers=_phoenix_exporter_headers,
+        )
+    )
 
 # Set the global tracer provider manually since we bypass `register`
 otel_trace.set_tracer_provider(tracer_provider)
@@ -300,11 +335,29 @@ async def chat_completion(
     ## --------------------------------------------------------------------------------------------------- #
 
         ## Retrieve Context for the user input
-        table_schema, context_for_sql_generation, context_for_user_response = await fetch_context(str(embedded_user_input), tableschema_dbconnection_pool=pool)
-        
-        ## Logging info when no context is retrieved
-        if not table_schema or not context_for_sql_generation or not context_for_user_response:
-            logging.warning("No context available for the given user input: %s", processed_user_input)
+        with tracer.start_as_current_span("2b. context_retrieval", context=ctx, kind=SpanKind.CLIENT) as span2b:
+            span2b.set_attributes({
+                SpanAttributes.OPENINFERENCE_SPAN_KIND: OpenInferenceSpanKindValues.RETRIEVER.value,
+                "info": "Vector similarity retrieval of table schema + few-shot examples from the knowledge base",
+                SpanAttributes.USER_ID: str(user_id),
+                SpanAttributes.INPUT_VALUE: str(processed_user_input),
+            })
+
+            table_schema, context_for_sql_generation, context_for_user_response = await fetch_context(str(embedded_user_input), tableschema_dbconnection_pool=pool)
+
+            ## Logging info when no context is retrieved
+            if not table_schema or not context_for_sql_generation or not context_for_user_response:
+                logging.warning("No context available for the given user input: %s", processed_user_input)
+
+            span2b.set_attribute("retrieval.table_schema", str(table_schema))
+
+            for doc_index, example_doc in enumerate(_split_context_examples(context_for_sql_generation)):
+                span2b.set_attribute(
+                    f"{SpanAttributes.RETRIEVAL_DOCUMENTS}.{doc_index}.{DocumentAttributes.DOCUMENT_CONTENT}",
+                    example_doc,
+                )
+
+            span2b.set_status(Status(StatusCode.OK))
         
         user_details = await fetch_user_details(user_id, pool)
         
@@ -316,8 +369,14 @@ async def chat_completion(
             })
 
             ## Prompt = Instructions + table schema + example + user_input
-            sql_generation_prompt = format_sql_prompt(raw_user_input, user_details, table_schema, context_for_sql_generation, 
-                                                      chat_history=last_n_user_queries)
+            sql_generation_prompt = format_sql_prompt(
+                user_input=raw_user_input,
+                user_details=user_details,
+                facm_code=facm_code,
+                table_schema=table_schema,
+                context_for_sql_generation=context_for_sql_generation,
+                chat_history=last_n_user_queries,
+            )
             
             span3.set_attributes({
                 "llm.system": "bedrock",
@@ -344,13 +403,73 @@ async def chat_completion(
             
             # Return if large data > 500 values is passed
             if num_cols * num_rows > 500:
+                logging.info(
+                    "Result set too large (%s rows x %s cols). Generating refinement guidance.",
+                    num_rows, num_cols,
+                )
+
+                # SQL generated for this request (set on span3 by sql_agent); used only for reasoning
+                generated_sql = str(span3.attributes.get("llm.output_messages.0.message.content") or "")
+
+                # Static fallback used if the refinement LLM call fails
                 large_volume_response = "The data set for your request is too large to process in one go. Please refine your query (e.g., by selecting a specific facility, time range, equipment, or limiting the record count)."
+
+                with tracer.start_as_current_span("3b. large_volume_refine", context=ctx, kind=SpanKind.CLIENT) as span3b:
+                    span3b.set_attributes({
+                        SpanAttributes.OPENINFERENCE_SPAN_KIND: OpenInferenceSpanKindValues.LLM.value,
+                        "info": "LLM call to generate refinement guidance for an over-limit result set",
+                        SpanAttributes.USER_ID: str(user_id),
+                    })
+
+                    refine_prompt = format_large_volume_refine_prompt(
+                        raw_user_input, generated_sql, num_rows, num_cols,
+                    )
+
+                    span3b.set_attributes({
+                        "llm.system": "bedrock",
+                        "llm.model_name": str(CHAT_MODEL_ID),
+                        "llm.input_messages.0.message.role": "system",
+                        "llm.input_messages.0.message.content": str(refine_prompt),
+                    })
+
+                    try:
+                        def _refine_generation(prompt, span):
+                            with trace.use_span(span):
+                                return chat_generation_model.generate_response(prompt, span=span)
+
+                        refine_result = await asyncio.gather(
+                            loop.run_in_executor(
+                                None,
+                                functools.partial(_refine_generation, refine_prompt, span=span3b),
+                            )
+                        )
+                        refined_text = refine_result[0]
+                        if refined_text and isinstance(refined_text, str) and refined_text.strip():
+                            large_volume_response = refined_text.strip()
+
+                        span3b.set_attributes({
+                            "llm.output_messages.0.message.role": "assistant",
+                            "llm.output_messages.0.message.content": str(large_volume_response),
+                        })
+                        span3b.set_status(Status(StatusCode.OK))
+                    except Exception as refine_exc:
+                        logging.error("Refinement generation failed, using static message: %s", refine_exc)
+                        span3b.record_exception(refine_exc)
+                        span3b.set_status(Status(StatusCode.ERROR, description=str(refine_exc)))
+
+                    # Collect tokens from span3b
+                    s3b_prompt = int(span3b.attributes.get("llm.token_count.prompt") or 0)
+                    s3b_completion = int(span3b.attributes.get("llm.token_count.completion") or 0)
+                    token_usage["prompt_tokens"] += s3b_prompt
+                    token_usage["completion_tokens"] += s3b_completion
+                    token_usage["total_tokens"] += (s3b_prompt + s3b_completion)
+
                 logging.info("Context length exceeded. Return Response: %s", large_volume_response)
                 process_time = time.time() - start_time
                 parent_span.set_attribute(SpanAttributes.OUTPUT_VALUE, large_volume_response)
                 parent_span.set_status(Status(StatusCode.OK))
                 parent_span.end()
-                
+
                 # Collect tokens from span3
                 s3_prompt = int(span3.attributes.get("llm.token_count.prompt") or 0)
                 s3_completion = int(span3.attributes.get("llm.token_count.completion") or 0)
@@ -395,7 +514,7 @@ async def chat_completion(
                         SpanAttributes.USER_ID: str(user_id)
                     })
                     
-                    response_to_user_prompt = format_response_to_user_prompt(raw_user_input, context_for_user_response, table_rows, 
+                    response_to_user_prompt = format_response_to_user_prompt(raw_user_input, context_for_user_response, table_rows,
                                                                              chat_history=last_n_user_queries)
 
                     span4.set_attributes({
@@ -403,6 +522,12 @@ async def chat_completion(
                         "llm.model_name": str(CHAT_MODEL_ID),
                         "llm.input_messages.0.message.role": "system",
                         "llm.input_messages.0.message.content":  str(response_to_user_prompt),
+                        # The exact SQL-result context the answer must be grounded in, and the
+                        # raw user question - kept as their own attributes (rather than only
+                        # embedded in the prompt above) so groundedness evals can read them
+                        # without parsing the full prompt string.
+                        "metadata.grounding_context": str(table_rows),
+                        "metadata.user_question": str(raw_user_input),
                     })
 
                     queue = asyncio.Queue()
@@ -452,6 +577,36 @@ async def chat_completion(
         process_time = time.time() - start_time
 
         buffer_container=[]
+
+        if getattr(request, "eval_mode", False):
+            # Consume stream immediately
+            async for chunk in traced_stream(ctx, buffer_container):
+                pass
+            
+            # buffer_container is now populated.
+            generated_sql = str(span3.attributes.get("llm.output_messages.0.message.content") if span3 else "")
+            
+            payload = {
+                "assistant_response": "".join(buffer_container),
+                "generated_sql": generated_sql,
+                "table_schema": str(table_schema) if 'table_schema' in locals() else "",
+                "table_rows": table_rows if isinstance(table_rows, str) else "",
+                "context_for_sql_generation": context_for_sql_generation if 'context_for_sql_generation' in locals() else "",
+                "context_for_user_response": context_for_user_response if 'context_for_user_response' in locals() else "",
+            }
+            
+            parent_span.set_attribute(SpanAttributes.OUTPUT_VALUE, payload["assistant_response"])
+            parent_span.set_status(Status(StatusCode.OK))
+            parent_span.end()
+            
+            async with pool.acquire() as conn:
+                await conn.execute(UPDATE_USER_QUOTA_USAGE, int(user_id), token_usage["total_tokens"])
+                logging.info(f"User Quota Updated for eval mode. Spent: {token_usage['total_tokens']} tokens.")
+            
+            return JSONResponse(
+                content=payload,
+                headers={"X-Response-Time": f"{process_time:.6f} seconds"}
+            )
 
         api_response = StreamingResponse(traced_stream(ctx, buffer_container), media_type="text/plain", 
                                             parent_span=parent_span, buffer_container=buffer_container, 

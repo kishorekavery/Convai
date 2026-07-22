@@ -19,6 +19,7 @@ from config import (
     USER_DETAILS_SCHEMA,
 )
 from database import connect_to_db
+from database import get_pool
 
 logging = get_logger(__name__)
 
@@ -75,9 +76,7 @@ async def fetch_context(
             f"embedded_user_input must be a non-empty string but given {embedded_user_input}"
         )
 
-    knowledgebase_dbconnection_pool = await connect_to_db(
-        database_name=KNOWLEDGEBASE_DATABASE_NAME
-    )
+    knowledgebase_dbconnection_pool = await get_pool(KNOWLEDGEBASE_DATABASE_NAME)
 
     if not knowledgebase_dbconnection_pool or not isinstance(
         knowledgebase_dbconnection_pool, Pool

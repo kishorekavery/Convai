@@ -12,7 +12,16 @@ logging = get_logger("fastapi")
 async def lifespan(app: FastAPI):
     logging.info("FastAPI app starting...")
     yield
-    logging.info("FastAPI app shutting down. Flushing traces...")
+    logging.info("FastAPI app shutting down. Closing DB pools and flushing traces...")
+
+    # Close all shared connection pools created during the process lifetime.
+    try:
+        from database import close_all_pools
+
+        await close_all_pools()
+    except Exception as e:
+        logging.error(f"Error closing DB pools on shutdown: {e}")
+
     # pyrefly: ignore [missing-import]
     from routers.llm_inference import tracer_provider
 

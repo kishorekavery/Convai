@@ -11,23 +11,40 @@ env/
 # IDE files
 .vscode/
 .idea/
+
+# OS generated files
 .DS_Store
+.DS_Store?
+._*
 
 # Local configs and logs
 .env
 logs/
 *.log
+.pytest_cache/
 
 # Git
 .git/
 .gitignore
+.github/
 
-#generate data
-./data
-./error_reports
-./Knowledge_base_query
+# Generated data
+data/
+error_reports/
+Knowledge_base_query/
+knowlege_base_query/
+tokenizer.json
 
-#experiments and deprecated files
-./deprecated
-./experiments
+# Experiments and deprecated files
+deprecated/
+experiments/
 test.py
+
+# Build/Dev files not needed in Docker image
+docker-compose.yml
+dockerbuild.sh
+README.md
+.changes/
+.claude/
+docs/
+*.md
