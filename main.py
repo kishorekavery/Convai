@@ -22,6 +22,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logging.error(f"Error closing DB pools on shutdown: {e}")
 
+    # Let in-flight Bedrock calls finish before the process exits, so a rolling
+    # deploy does not truncate a response mid-generation.
+    try:
+        from models import shutdown_bedrock_executor
+
+        shutdown_bedrock_executor(wait=True)
+    except Exception as e:
+        logging.error(f"Error shutting down the Bedrock executor: {e}")
+
     # pyrefly: ignore [missing-import]
     from routers.llm_inference import tracer_provider
 

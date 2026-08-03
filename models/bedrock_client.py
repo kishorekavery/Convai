@@ -1,5 +1,8 @@
 import json
+from functools import lru_cache
+
 import boto3
+from botocore.config import Config
 from botocore.exceptions import (
     BotoCoreError,
     NoCredentialsError,
@@ -10,9 +13,51 @@ from time import time
 
 from config import get_logger
 from config import AWS_REGION, AWS_ACCESS_KEY, AWS_SECRET_KEY
+from config import (
+    BEDROCK_CONNECT_TIMEOUT,
+    BEDROCK_READ_TIMEOUT,
+    BEDROCK_MAX_ATTEMPTS,
+)
 
 # Load logger
 logging = get_logger(__name__)
+
+
+@lru_cache(maxsize=1)
+def get_bedrock_runtime_client():
+    """
+    Return the process-wide bedrock-runtime client, creating it on first use.
+
+    Building a boto3 client resolves credentials, loads and parses the service
+    model and constructs the endpoint - tens to hundreds of milliseconds. The
+    previous code did that inside every model wrapper, so a single request paid
+    for it four times (embedding, SQL, chat, classification) on the synchronous
+    path. The client itself is stateless with respect to the model being
+    invoked, so one instance serves every model id.
+
+    Cached lazily rather than built at import so that importing this module does
+    not require AWS credentials - tests and tooling can import it freely.
+
+    Thread-safety: boto3 *clients* are safe for concurrent method calls; boto3
+    *sessions* are not safe for concurrent client creation. Creating one here is
+    therefore strictly safer than the previous per-request construction across
+    executor threads.
+    """
+    logging.info("Creating the shared AWS Bedrock runtime client.")
+    return boto3.client(
+        "bedrock-runtime",
+        region_name=AWS_REGION,
+        aws_access_key_id=AWS_ACCESS_KEY,
+        aws_secret_access_key=AWS_SECRET_KEY,
+        config=Config(
+            connect_timeout=BEDROCK_CONNECT_TIMEOUT,
+            read_timeout=BEDROCK_READ_TIMEOUT,
+            # Adaptive mode adds client-side rate limiting, so a burst of
+            # ThrottlingExceptions is retried and paced instead of surfacing
+            # as a 500.
+            retries={"max_attempts": BEDROCK_MAX_ATTEMPTS, "mode": "adaptive"},
+        ),
+    )
 
 
 class BedrockClient:
@@ -21,12 +66,9 @@ class BedrockClient:
         self.model_id = model_id
         self.contentType = contentType
         self.accept = accept
-        self.client = boto3.client(
-            "bedrock-runtime",
-            region_name=AWS_REGION,
-            aws_access_key_id=AWS_ACCESS_KEY,
-            aws_secret_access_key=AWS_SECRET_KEY,
-        )
+        # Shared across every wrapper instance; constructing a wrapper is now
+        # cheap, so the per-request instantiations cost nothing meaningful.
+        self.client = get_bedrock_runtime_client()
 
     def invoke_model(self, payload: dict):
         """Generic method to invoke an AWS Bedrock model."""

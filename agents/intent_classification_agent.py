@@ -8,15 +8,84 @@ from config import get_logger
 ## Initiate Logger
 logging = get_logger(__name__)
 
+# Classification type -> what the router should do with the request.
+_TYPE_TO_ACTION = {
+    "sql": "call_sql_model",
+    "greeting": "return_greeting",
+    "rejected": "return_rejection_response",
+    "follow_up_pagination": "follow_up_pagination",
+}
 
-def intent_classification(user_input, chat_history, CLASSIFICATION_MODEL_ID, span):
-    """Classify the user input to determine the intent and return the action to be taken.
+
+def parse_classification_output(intent_output: str, user_input: str) -> dict:
+    """
+    Turn the model's raw JSON into the intent dict the router consumes.
+
+    Kept separate from the Bedrock call so the parsing and its fallbacks can be
+    tested without a live model.
+
     Args:
-        start_time (float): The time when the request was received.
-        user_input (str): The user input to classify.
-        chat_history (str): The chat history to consider for classification.
+        intent_output (str): raw text returned by the classification model.
+        user_input (str): the user's message, used as the resolved_query
+            fallback whenever the model omits or empties that field.
+
     Returns:
-        dict: A dictionary containing the classification type, message, reason, and action to be taken.
+        dict: type, message, action, is_followup, resolved_query.
+
+    Raises:
+        json.JSONDecodeError: if the output is not valid JSON.
+        ValueError: if the output is empty or carries an unknown type.
+    """
+    if not intent_output or not intent_output.strip():
+        raise ValueError("Empty or invalid response from classification model.")
+
+    result = json.loads(clean_json_output(intent_output))
+    logging.info(f"Classification result: {result}")
+
+    classification_type = result.get("type")
+    if classification_type not in _TYPE_TO_ACTION:
+        raise ValueError(f"Unexpected type: {classification_type}")
+
+    # A greeting or rejection is answered directly and never routed onward, so
+    # resolving it would have no consumer.
+    is_followup = bool(result.get("is_followup", False))
+
+    # Fall back to the raw message whenever the model leaves resolved_query out,
+    # blank, or non-string. Downstream reads this field unconditionally, so it
+    # must never be empty.
+    resolved_query = result.get("resolved_query")
+    if not isinstance(resolved_query, str) or not resolved_query.strip():
+        if is_followup:
+            logging.warning(
+                "Classifier flagged a follow-up but returned no resolved_query; "
+                "falling back to the raw user input."
+            )
+        resolved_query = user_input
+    else:
+        resolved_query = resolved_query.strip()
+
+    return {
+        "type": classification_type,
+        "message": result.get("message", ""),
+        "action": _TYPE_TO_ACTION[classification_type],
+        "is_followup": is_followup,
+        "resolved_query": resolved_query,
+    }
+
+
+def intent_classification(
+    user_input, conversation_context, CLASSIFICATION_MODEL_ID, span
+):
+    """Classify the user input, and resolve a follow-up into a standalone question.
+
+    Args:
+        user_input (str): The user input to classify.
+        conversation_context (str): Recent turns as a "User:/Assistant:" transcript,
+            used to decide whether the message is a follow-up and to resolve it.
+        CLASSIFICATION_MODEL_ID (str): model id, recorded on the span.
+        span: OpenTelemetry span for this classification step.
+    Returns:
+        dict: classification type, message, action, is_followup and resolved_query.
     """
 
     try:
@@ -24,8 +93,10 @@ def intent_classification(user_input, chat_history, CLASSIFICATION_MODEL_ID, spa
         ## Classify the user input to determine the intent
         intent_classification_model = ClassificationModel()
 
-        ## Prompt = Instructions + table schema + example + user_input
-        classification_prompt = format_classification_prompt(user_input, chat_history)
+        ## Prompt = Instructions + recent turns + user_input
+        classification_prompt = format_classification_prompt(
+            user_input, conversation_context
+        )
 
         span.set_attributes(
             {
@@ -36,48 +107,29 @@ def intent_classification(user_input, chat_history, CLASSIFICATION_MODEL_ID, spa
             }
         )
 
-        # changed
         intent_output = intent_classification_model.generate_classification(
             classification_prompt, span=span
         )
-        # print("Intent Classification Result:", intent_output)
 
-        if not intent_output or not intent_output.strip():
-            logging.error("Empty or invalid response from classification model.")
-            raise ValueError("Empty or invalid response from classification model.")
+        result = parse_classification_output(intent_output, user_input)
 
-        intent_output_cleaned = clean_json_output(intent_output)
-        logging.info(f"Classification cleaned output: {intent_output_cleaned}")
-
-        result = json.loads(intent_output_cleaned)
-        logging.info(f"Classification result: {result}")
-
-        classification_type = result.get("type")
-        logging.info(f"Classification type: {classification_type}")
-
-        message = result.get("message", "")
-        logging.info(f"Classification output: {message}")
-
-        if classification_type == "sql":
-            action = "call_sql_model"
-        elif classification_type == "greeting":
-            action = "return_greeting"
-        elif classification_type == "rejected":
-            action = "return_rejection_response"
-        elif classification_type == "follow_up_pagination":
-            action = "follow_up_pagination"
-        else:
-            raise ValueError(f"Unexpected type: {classification_type}")
-
-        logging.info(
-            f"Classification result: {classification_type}, Message: {message}, Action: {action}"
+        span.set_attributes(
+            {
+                "classification.type": result["type"],
+                "classification.is_followup": result["is_followup"],
+                "classification.resolved_query": result["resolved_query"],
+            }
         )
 
-        return {
-            "type": classification_type, 
-            "message": message, 
-            "action": action
-        }
+        logging.info(
+            "Classification: type=%s action=%s is_followup=%s resolved_query=%s",
+            result["type"],
+            result["action"],
+            result["is_followup"],
+            result["resolved_query"],
+        )
+
+        return result
 
     except json.JSONDecodeError as e:
         logging.error(f"JSON decoding error: {str(e)}")
@@ -86,6 +138,8 @@ def intent_classification(user_input, chat_history, CLASSIFICATION_MODEL_ID, spa
             "type": "error",
             "message": f"Failed to parse model output. Error: {str(e)}",
             "action": "log_and_notify",
+            "is_followup": False,
+            "resolved_query": user_input,
         }
 
     except Exception as e:
@@ -95,6 +149,8 @@ def intent_classification(user_input, chat_history, CLASSIFICATION_MODEL_ID, spa
             "type": "error",
             "message": f"Unexpected error during classification parsing. Error: {str(e)}",
             "action": "log_and_notify",
+            "is_followup": False,
+            "resolved_query": user_input,
         }
 
 

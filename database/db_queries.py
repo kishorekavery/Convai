@@ -1,4 +1,5 @@
 import re
+from collections import defaultdict
 from fastapi import HTTPException, status
 from asyncpg import (
     exceptions,
@@ -17,9 +18,19 @@ from config import (
     DATA_SCHEMA,
     KNOWLEDGEBASE_DATABASE_NAME,
     USER_DETAILS_SCHEMA,
+    AI_SQL_STATEMENT_TIMEOUT_MS,
+    AI_SQL_COUNT_TIMEOUT_MS,
 )
 from database import connect_to_db
 from database import get_pool
+from database.schema_cache import table_schema_cache
+from database.sql_safety import validate_identifier
+from config import KNOWLEDGEBASE_TABLE
+
+# A table name cannot be a bind parameter, so it is interpolated - validated
+# once at import to the same identifier rules the SQL validator applies, so a
+# malformed KNOWLEDGEBASE_TABLE fails at startup rather than at query time.
+_KB_TABLE = validate_identifier(KNOWLEDGEBASE_TABLE, label="knowledge base table")
 
 logging = get_logger(__name__)
 
@@ -51,8 +62,89 @@ def format_schema(records):
     return "\n".join(lines)
 
 
+async def fetch_table_schemas(
+    database_name: str, table_names: List[str], pool: Pool
+) -> dict:
+    """
+    Return {table_name: formatted schema} for ``table_names``.
+
+    Replaces a per-table query loop. Two things made that loop expensive: the
+    ``await`` sat inside the loop so the round trips ran strictly in sequence
+    against a remote database, and ``information_schema.columns`` is a view over
+    pg_attribute/pg_class/pg_namespace/pg_type with a per-row privilege check
+    rather than a table.
+
+    Now: cached schemas are served from memory, and whatever remains is fetched
+    in a single ``= ANY($2)`` query. Steady state is zero round trips.
+
+    Args:
+        database_name (str): tenant database, part of the cache key.
+        table_names (List[str]): tables to describe.
+        pool (asyncpg.Pool): pool for the tenant database.
+
+    Returns:
+        dict: table name -> formatted schema text ("" if the table is unknown).
+    """
+    if not table_names:
+        return {}
+
+    resolved = {}
+    missing = []
+    for name in table_names:
+        cached = table_schema_cache.get(database_name, name)
+        if cached is None:
+            missing.append(name)
+        else:
+            resolved[name] = cached
+
+    if missing:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """SELECT table_name, column_name, data_type
+                   FROM information_schema.columns
+                   WHERE table_schema = $1 AND table_name = ANY($2)
+                   ORDER BY table_name, ordinal_position;
+                """,
+                DATA_SCHEMA,
+                missing,
+            )
+
+        # ORDER BY ordinal_position above means columns are listed in their
+        # declared order, which the per-table query did not guarantee.
+        columns_by_table = defaultdict(list)
+        for row in rows:
+            columns_by_table[row["table_name"]].append(row)
+
+        for name in missing:
+            columns = columns_by_table.get(name, [])
+            if not columns:
+                logging.warning(
+                    "No columns found for table '%s' in schema '%s' of database '%s'.",
+                    name,
+                    DATA_SCHEMA,
+                    database_name,
+                )
+            formatted = format_schema(columns)
+            table_schema_cache.put(database_name, name, formatted)
+            resolved[name] = formatted
+
+        logging.info(
+            "Table schemas: %s served from cache, %s fetched in 1 query.",
+            len(table_names) - len(missing),
+            len(missing),
+        )
+    else:
+        logging.info(
+            "Table schemas: all %s served from cache, 0 queries.", len(table_names)
+        )
+
+    return resolved
+
+
 async def fetch_context(
-    embedded_user_input: str, tableschema_dbconnection_pool: Pool
+    embedded_user_input: str,
+    tableschema_dbconnection_pool: Pool,
+    database_name: str = "",
 ) -> str:
     """
     Fetch context asynchronously from the database based on the embedded user input.
@@ -105,8 +197,8 @@ async def fetch_context(
         async with knowledgebase_dbconnection_pool.acquire() as conn:
             # await conn.execute(f"SET search_path TO {KNOWLEDGEBASE_SCHEMA_NAME}")
             rows = await conn.fetch(
-                """SELECT kbe_id, kbe_reference_tables, kbe_user_input, kbe_sql_query, kbe_user_response 
-                                    FROM ai.knowledge_base_examples kbe
+                f"""SELECT kbe_id, kbe_reference_tables, kbe_user_input, kbe_sql_query, kbe_user_response
+                                    FROM {_KB_TABLE} kbe
                                     ORDER BY kbe_user_input_embedding <=> $1
                                     LIMIT $2;
                                     """,
@@ -144,32 +236,32 @@ async def fetch_context(
 
             n += 1
 
-        table_names = list(set().union(*temp_table_names))
+        # sorted(), not list(set(...)): set iteration order for strings depends
+        # on per-process hash randomisation, so two identical requests handled
+        # by different workers previously produced the same schema text in a
+        # different order. Sorting makes the prompt reproducible.
+        # filter(None, ...) guards a NULL kbe_reference_tables, which would
+        # otherwise raise TypeError inside set().union().
+        # lower(): PostgreSQL folds unquoted identifiers, so a knowledge-base
+        # entry stored as 'Calibrationmasterdetails' matched no table and its
+        # schema was silently never fetched.
+        table_names = sorted(
+            {
+                name.lower()
+                for names in temp_table_names
+                if names
+                for name in names
+                if name
+            }
+        )
 
-        async with tableschema_dbconnection_pool.acquire() as conn:
-            # await conn.execute(f"SET search_path TO {DATA_SCHEMA}")
-            for table_name in table_names:
-                schema = await conn.fetch(
-                    """SELECT column_name, data_type
-                                        FROM information_schema.columns
-                                        WHERE table_name = $1 and table_schema = $2;
-                                        """,
-                    table_name,
-                    DATA_SCHEMA,
-                )
-
-                # table = tabulate(schema, headers="keys", tablefmt="github")
-
-                # table_schema += f"Table Schema of {table_name}:\n\n{schema}\n\n"
-                formatted_schema = format_schema(schema)
-                table_schema += (
-                    f"Table Schema of {table_name}:\n\n{formatted_schema}\n\n"
-                )
-
-            # print(table_names)
-            # print(table_schema)
-            # print(context_for_sql_generation)
-            # print(context_for_chat_response)
+        schemas = await fetch_table_schemas(
+            database_name, table_names, tableschema_dbconnection_pool
+        )
+        table_schema = "".join(
+            f"Table Schema of {name}:\n\n{schemas.get(name, '')}\n\n"
+            for name in table_names
+        )
 
         processing_time = time() - start_time
         logging.info("Context Retrieval Time: %s", processing_time)
@@ -231,13 +323,54 @@ async def execute_ai_generated_sql(sql: str, pool: Pool):
         start_time = time()
 
         async with pool.acquire() as conn:
-            await conn.execute(f"SET search_path TO {DATA_SCHEMA}")
-            rows = await conn.fetch(sql)
+            # Read-only transaction: the SQL was generated by a language model
+            # and sql_safety.py screens it with regexes, which cannot reliably
+            # parse SQL. This moves the guarantee from pattern matching to
+            # Postgres - a write that slips past the validator is refused by
+            # the database itself.
+            async with conn.transaction(readonly=True):
+                # SET LOCAL, not SET: a plain SET persists on the pooled
+                # connection after it is returned, and fetch_user_details sets
+                # search_path to public on the same pool, so the two have been
+                # overwriting each other depending on borrow order. LOCAL is
+                # scoped to this transaction and reverts on commit.
+                await conn.execute(f"SET LOCAL search_path TO {DATA_SCHEMA}")
+                await conn.execute(
+                    f"SET LOCAL statement_timeout = {AI_SQL_STATEMENT_TIMEOUT_MS}"
+                )
+                rows = await conn.fetch(sql)
 
         processing_time = time() - start_time
         logging.info("AI Query Execution Time: %s", processing_time)
 
         return rows
+
+    except exceptions.QueryCanceledError:
+        # The statement_timeout fired. Typically a dropped join condition: the
+        # cartesian product cannot terminate early because ORDER BY forces a
+        # full sort before LIMIT applies.
+        logging.error(
+            "AI generated SQL exceeded the %s ms statement timeout. SQL: %s",
+            AI_SQL_STATEMENT_TIMEOUT_MS,
+            sql,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="That query took too long to run. Please narrow your request "
+            "(for example a shorter time range, a specific facility, or a count "
+            "instead of a full list).",
+        )
+
+    except exceptions.ReadOnlySQLTransactionError:
+        # The regex validator missed a write and Postgres caught it.
+        logging.error(
+            "AI generated SQL attempted a write inside the read-only transaction. SQL: %s",
+            sql,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="The AI generated a potentially unsafe SQL query.",
+        )
 
     except exceptions.UndefinedColumnError as e:
         error_msg = (
@@ -266,17 +399,45 @@ async def execute_ai_generated_sql(sql: str, pool: Pool):
         )
 
 
+async def execute_count_query(count_sql: str, pool: Pool):
+    """
+    Run a COUNT(*) wrapper over an AI-generated query and return the scalar.
+
+    Kept separate from execute_ai_generated_sql because the caller treats a
+    failure here as non-fatal - losing the count only costs the "more pages"
+    hint, not the answer - so this returns None instead of raising an
+    HTTPException. It sets the same search_path as the query being counted;
+    without that the count can resolve different tables than the main query.
+
+    This query has had its LIMIT stripped, so it scans the entire result set by
+    design - which makes it the worst amplifier of a bad generation. Hence the
+    tighter timeout: if counting a cartesian product is going to be slow, give
+    up quickly and drop the hint rather than hold a connection.
+    """
+    async with pool.acquire() as conn:
+        async with conn.transaction(readonly=True):
+            await conn.execute(f"SET LOCAL search_path TO {DATA_SCHEMA}")
+            await conn.execute(
+                f"SET LOCAL statement_timeout = {AI_SQL_COUNT_TIMEOUT_MS}"
+            )
+            return await conn.fetchval(count_sql)
+
+
 async def fetch_user_details(user_id: str, pool: Pool):
 
     try:
         usr_id = int(user_id) if user_id.isdigit() else None
 
         async with pool.acquire() as conn:
-            await conn.execute(f"SET search_path TO {USER_DETAILS_SCHEMA}")
-            raw_user_details = await conn.fetch(
-                "SELECT usr_id, usr_name, usr_personalcode  FROM users_m WHERE usr_id = $1;",
-                usr_id,
-            )
+            # SET LOCAL inside a transaction: a plain SET here persisted on the
+            # pooled connection and left search_path pointing at the user schema
+            # for whichever query borrowed it next.
+            async with conn.transaction(readonly=True):
+                await conn.execute(f"SET LOCAL search_path TO {USER_DETAILS_SCHEMA}")
+                raw_user_details = await conn.fetch(
+                    "SELECT usr_id, usr_name, usr_personalcode  FROM users_m WHERE usr_id = $1;",
+                    usr_id,
+                )
 
         if raw_user_details:
             ## Convert each asyncpg Record to a dictionary

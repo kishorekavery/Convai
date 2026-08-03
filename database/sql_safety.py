@@ -45,6 +45,16 @@ _INJECTION_RED_FLAGS_RE = re.compile(
 # Allowed identifier characters (letters, digits, underscores, dots for schema.table)
 _IDENTIFIER_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_.]*$")
 
+# Applied only to WITH statements, where the leading keyword no longer proves
+# the query is read-only. Deliberately stricter than _DANGEROUS_KEYWORDS_RE:
+# bare keywords rather than phrases, so no spelling variant slips through.
+# \b on both sides keeps identifiers like workorder_createdtime and status
+# values like 'DELETED' from matching.
+_CTE_FORBIDDEN_RE = re.compile(
+    r"\b(?:INSERT|UPDATE|DELETE|MERGE|TRUNCATE|DROP|ALTER|CREATE|GRANT|REVOKE)\b",
+    re.IGNORECASE,
+)
+
 
 def validate_sql(sql: str, allowed_tables: Optional[set] = None) -> str:
     """
@@ -80,11 +90,29 @@ def validate_sql(sql: str, allowed_tables: Optional[set] = None) -> str:
             "Received a query with semicolons indicating multiple statements."
         )
 
-    # Step 4: Extract the leading keyword and verify it's a SELECT
+    # Step 4: Extract the leading keyword. SELECT is the normal case; WITH is
+    # allowed because a read-only CTE is a legitimate and common shape (the
+    # knowledge base itself contains one), and rejecting it produced a 403 for
+    # a perfectly safe query.
     first_word = sql_stripped.split()[0].upper()
-    if first_word != "SELECT":
+    if first_word not in ("SELECT", "WITH"):
         raise ValueError(
             f"Only SELECT queries are allowed. Received: {first_word}."
+        )
+
+    # A CTE can carry a data-modifying statement that the leading keyword no
+    # longer rules out - PostgreSQL accepts both
+    #     WITH x AS (DELETE FROM t RETURNING *) SELECT * FROM x
+    #     WITH x AS (SELECT 1) DELETE FROM t
+    # Step 5 below catches the common spellings, but it matches specific
+    # phrases (DELETE FROM, UPDATE <t> SET) and variants like "UPDATE ONLY t
+    # SET" slip past it. For WITH statements only, require that no
+    # data-modifying keyword appears at all. Verified against the knowledge
+    # base corpus: no legitimate read-only example trips this.
+    if first_word == "WITH" and _CTE_FORBIDDEN_RE.search(sql_stripped):
+        raise ValueError(
+            "WITH queries must be read-only. The statement contains a "
+            "data-modifying keyword."
         )
 
     # Step 5: Check for forbidden DML/DDL keywords (covers subqueries too)

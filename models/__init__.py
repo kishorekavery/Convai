@@ -1,5 +1,10 @@
 from .data_models import ChatCompletionRequest as ChatCompletionRequest
 from .bedrock_client import BedrockClient as BedrockClient
+from .bedrock_client import get_bedrock_runtime_client as get_bedrock_runtime_client
+from .executor import get_bedrock_executor as get_bedrock_executor
+from .executor import shutdown_bedrock_executor as shutdown_bedrock_executor
 from .classification_model import ClassificationModel as ClassificationModel
+from .embedding_cache import embedding_cache as embedding_cache
+from .embedding_cache import EmbeddingCache as EmbeddingCache
 from .embedding_model import TitanEmbeddingModel as TitanEmbeddingModel
 from .text_generation_model import ChatModel as ChatModel

@@ -84,6 +84,7 @@ def format_response_to_user_prompt(
     context_for_user_response: str = "",
     table_rows="",
     chat_history: str = "",
+    pagination_context: str = "",
 ) -> str:
     """
     Returns the formatted prompt as a string for chat response
@@ -92,9 +93,38 @@ def format_response_to_user_prompt(
         context_for_user_response (str): user_query-SQL examples relevant to the user's query (Fetched from the vectorDB)
         table_rows (str): tabulated SQL result rows to answer the user's query from
         chat_history (str): Last 5 chat interactions between the user & AI
+        pagination_context (str): set only when the user asked for the next page
+            of an earlier question. Carries the original question and which
+            records this page covers, because the follow-up's own text
+            ("show me more") describes neither.
     Output:
         formatted_prompt (str)
     """
+
+    # Only rendered for follow-up pages, so a normal answer is not padded with
+    # continuation instructions that do not apply to it.
+    pagination_block = (
+        f"""
+## Continuation Context: ##
+{pagination_context}
+
+## Continuation Instructions: ##
+- The user is asking for the next page of an earlier question, so their message
+  ("more", "next 50") is not the question itself. Answer the ORIGINAL question
+  stated in the Continuation Context, using only the fetched data below.
+- Open by making clear what these records are, based on the original question -
+  the user should not have to remember what they asked.
+- State which records this page covers out of the total, using the range given
+  in the Continuation Context. Use those exact numbers; never estimate them.
+- The fetched data below is ONLY this page. Do not repeat, re-count or
+  re-summarise records from earlier pages, and do not describe this page's row
+  count as the total number of matching records.
+- If the Continuation Context says there are no further records, say plainly
+  that there are no more records to show, and do not invent any.
+"""
+        if pagination_context
+        else ""
+    )
 
     prompt = f""" #SYSTEM PROMPT
 You are MaintWiz AI, a helpful AI assistant answering user queries strictly based on the fetched data.
@@ -129,7 +159,7 @@ You are MaintWiz AI, a helpful AI assistant answering user queries strictly base
 
 # ##Examples:##
 {context_for_user_response}
-
+{pagination_block}
 ## Fetched Data: ##
 {table_rows}
 
@@ -196,24 +226,62 @@ answer the question. Your job is to help the user narrow it down.
     return prompt
 
 
-def format_classification_prompt(user_input: str = "", chat_history: str = "") -> str:
+def format_classification_prompt(
+    user_input: str = "", conversation_context: str = ""
+) -> str:
     """
-    Returns the formatted prompt as a string for intent classification
+    Returns the formatted prompt as a string for intent classification.
+
+    The classifier both routes the message and resolves it: a follow-up such as
+    "what about last quarter?" is rewritten into a standalone question so that
+    retrieval and SQL generation downstream never have to guess what "that"
+    referred to.
+
     Input:
-        user_input (str): user's question (Entered by the user through the chat interface)
-        chat_history (str): Last 5 chat interactions between the user & AI
+        user_input (str): the user's current message, exactly as typed
+        conversation_context (str): the last few turns as a
+            "User: ... / Assistant: ..." transcript (see
+            dataprocessing.get_last_n_exchanges). Empty on the first message.
     Output:
         formatted_prompt (str)
     """
 
+    transcript = conversation_context.strip() or "(no previous turns - this is the first message of the conversation)"
+
     prompt = f""" You are MaintWiz AI, a classification assistant responsible for routing user input correctly.
 
 ## Your Responsibilities: ##
+You do two jobs at once: classify the message, and resolve it into a standalone question.
+
+### 1. Classify ###
 Classify the user's message as one of:
 - "sql": If it requests maintenance-related data that needs SQL (e.g., work order stats, breakdown analysis, PM compliance, downtime trends, safety permits, calibration schedules, etc.)
 - "greeting": If it's a greeting or polite opener (e.g., "Hi", "Good morning", "Hello MaintWiz", "How are you?")
 - "rejected": If it's not related to maintenance (e.g., general questions, support inquiries, jokes, product/feature questions)
-- "follow_up_pagination": If the user is asking to paginate or continue a previous query (e.g., "next 50", "more please", "page 2", "show next")
+- "follow_up_pagination": If the user is asking ONLY to see more rows of the previous result (e.g., "next 50", "more please", "page 2", "show next"). If they ask for more rows AND also change the question (e.g., "show more, sorted by technician"), classify it as "sql" instead, because a new query is needed.
+
+### 2. Decide if it is a follow-up ###
+Set "is_followup" to true only when the message CANNOT be understood on its own and depends on the conversation above. Signals of a follow-up:
+- Pronouns or demonstratives with no referent in the message: "explain that", "why is it so high", "show those"
+- Ellipsis - a fragment that omits the subject: "what about last quarter?", "and for plant B?", "only the open ones"
+- Comparatives or refinements of a previous result: "sort by technician", "just the critical ones", "same for last year"
+- Pagination: "next 50", "show more"
+
+Set "is_followup" to false when the message stands on its own, EVEN IF it is short. A short message is not automatically a follow-up.
+- "how many breakdowns last week?" names its own subject -> NOT a follow-up
+- "PM compliance?" names its own subject -> NOT a follow-up
+- A greeting is never a follow-up.
+- If there are no previous turns, "is_followup" is always false.
+
+The test to apply: could a colleague who did not read the conversation understand what is being asked? If yes, it is not a follow-up.
+
+### 3. Resolve the query ###
+"resolved_query" is the message rewritten as a standalone question.
+- If "is_followup" is false, copy the user's message into "resolved_query" UNCHANGED.
+- If "is_followup" is true, rewrite it using ONLY facts that appear in the conversation above - carry over the subject, filters, time range and entities that the message leaves implicit.
+- NEVER invent an entity, table, metric, date or filter that does not appear in the conversation or in the message.
+- If the message is a follow-up but the conversation does not contain enough information to resolve it, copy the message unchanged into "resolved_query" and still set "is_followup" to true.
+- Keep the rewrite short and literal. Do not add analysis, explanation or extra conditions.
 
 ## Scope Restriction: ##
 You only support queries related to **maintenance, operations, manufacturing, assets, machines, spares, facilities, safety/compliance, and similar things**, such as:
@@ -230,86 +298,135 @@ You only support queries related to **maintenance, operations, manufacturing, as
 Respond with **only** a single valid JSON object matching the schema below. Do not include markdown code fences, labels, or any explanatory text before or after it.
 {{
   "type": "sql" | "greeting" | "rejected" | "follow_up_pagination",
-  "message": "<what should be done or said>"
+  "message": "<what should be done or said>",
+  "is_followup": true | false,
+  "resolved_query": "<the message rewritten as a standalone question>"
 }}
 
-Examples:
+## Examples ##
+
+--- Example 1: no history, self-contained question ---
+Conversation:
+(no previous turns)
 User: "How many preventive work orders were completed last week?"
 Output: {{
 "type": "sql",
-"message": ""
+"message": "",
+"is_followup": false,
+"resolved_query": "How many preventive work orders were completed last week?"
 }}
 
-User: "Show list of safety permits"
+--- Example 2: ellipsis follow-up, time range changed ---
+Conversation:
+User: What are the recent work orders for plant A?
+Assistant: Here are the 50 most recent work orders for plant A...
+User: "what about last month?"
 Output: {{
 "type": "sql",
-"message": ""
+"message": "",
+"is_followup": true,
+"resolved_query": "What are the work orders for plant A from last month?"
 }}
 
+--- Example 3: topic switch - short, but stands on its own ---
+Conversation:
+User: What are the recent work orders for plant A?
+Assistant: Here are the 50 most recent work orders for plant A...
+User: "how many breakdowns happened in plant B?"
+Output: {{
+"type": "sql",
+"message": "",
+"is_followup": false,
+"resolved_query": "how many breakdowns happened in plant B?"
+}}
+
+--- Example 4: pronoun with no referent in the message ---
+Conversation:
+User: Show the breakdown work orders for pump P-101
+Assistant: There are 12 breakdown work orders for pump P-101...
+User: "explain that more"
+Output: {{
+"type": "sql",
+"message": "",
+"is_followup": true,
+"resolved_query": "Explain the breakdown work orders for pump P-101 in more detail"
+}}
+
+--- Example 5: pure pagination ---
+Conversation:
+User: List the recent work orders
+Assistant: Here are the 50 most recent work orders...
 User: "next 50 please"
 Output: {{
 "type": "follow_up_pagination",
-"message": ""
+"message": "",
+"is_followup": true,
+"resolved_query": "List the recent work orders, next 50"
 }}
 
-User: "show page 2"
+--- Example 6: more rows AND a change - needs a new query ---
+Conversation:
+User: List the recent work orders
+Assistant: Here are the 50 most recent work orders...
+User: "show more, sorted by technician"
 Output: {{
-"type": "follow_up_pagination",
-"message": ""
+"type": "sql",
+"message": "",
+"is_followup": true,
+"resolved_query": "List the recent work orders sorted by technician"
 }}
 
-User: "show me more"
+--- Example 7: refinement of the previous result ---
+Conversation:
+User: Show the open work orders for the boiler
+Assistant: There are 34 open work orders for the boiler...
+User: "only the critical ones"
 Output: {{
-"type": "follow_up_pagination",
-"message": ""
+"type": "sql",
+"message": "",
+"is_followup": true,
+"resolved_query": "Show the critical open work orders for the boiler"
 }}
 
+--- Example 8: greeting ---
+Conversation:
+(no previous turns)
 User: "Hi there!"
 Output: {{
 "type": "greeting",
-"message": "Hello! How can I assist you with your maintenance operations today?"
+"message": "Hello! How can I assist you with your maintenance operations today?",
+"is_followup": false,
+"resolved_query": "Hi there!"
 }}
 
-User: "Can you tell me a joke?"
-Output: {{
-"type": "rejected",
-"message": "Hi! I'm here to help with maintenance-related queries only. Can you please rephrase your question?"
-}}
-
+--- Example 9: out of scope ---
+Conversation:
+User: What are the recent work orders?
+Assistant: Here are the 50 most recent work orders...
 User: "who is the president of the US?"
 Output: {{
 "type": "rejected",
-"message": "Hi! I'm here to help with maintenance-related queries only. Can you please rephrase your question?"
+"message": "Hi! I'm here to help with maintenance-related queries only. Can you please rephrase your question?",
+"is_followup": false,
+"resolved_query": "who is the president of the US?"
 }}
 
-User: "which machines had breakdowns yesterday?"
+--- Example 10: follow-up that cannot be resolved from the history ---
+Conversation:
+User: Hi
+Assistant: Hello! How can I assist you with your maintenance operations today?
+User: "what about last quarter?"
 Output: {{
 "type": "sql",
-"message": ""
+"message": "",
+"is_followup": true,
+"resolved_query": "what about last quarter?"
 }}
 
-User: "what is the PM schedule for next month?"
-Output: {{
-"type": "sql",
-"message": ""
-}}
+## Conversation so far (most recent turns last) ##
+{transcript}
 
-User: "good morning!"
-Output: {{
-"type": "greeting",
-"message": "Good morning! How can I assist you with your maintenance operations today?"
-}}
-
-User: "write a python script to scrape a website"
-Output: {{
-"type": "rejected",
-"message": "Hi! I'm here to help with maintenance-related queries only. Can you please rephrase your question?"
-}}
-
-##Chat History##
-{chat_history}
-
-Now classify the user input below keeping the context from the past user queries(provided in the descending order):
+Now classify the user's current message below, using the conversation above to decide whether it is a follow-up and to resolve it.
 #USER QUERY:\n{user_input}
 #ASSISTANT:\n"""
 

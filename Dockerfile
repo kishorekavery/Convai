@@ -60,7 +60,21 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
 
-# Command to run the application using gunicorn with 9 uvicorn workers.
-# This replaces the single-process `uvicorn` to allow maximum concurrency
-# as requested in our previous checklist!
-CMD ["gunicorn", "main:app", "-w", "9", "-k", "uvicorn.workers.UvicornWorker", "-b", "0.0.0.0:8000"]
+# Worker count. These are ASYNC (uvicorn) workers: each runs an event loop that
+# already handles many concurrent requests, so the "(2 x cores) + 1" rule for
+# synchronous workers does not apply - the guide is roughly one worker per core.
+#
+# The binding constraint here is not CPU but database connections, because pools
+# cannot be shared across processes:
+#     workers x (concurrently active tenants + 1) x DB_MAX_CONN <= max_connections
+# At 4 workers / 3 active tenants / DB_MAX_CONN=4 that is 64, against a default
+# max_connections of 100. The previous value of 9 put the same figure at 144.
+#
+# Fewer workers also means less fragmentation of the per-process caches
+# (pagination, table schemas, embeddings), since each worker keeps its own copy.
+#
+# Gunicorn reads WEB_CONCURRENCY when -w is not given, so this is overridable at
+# run time without rebuilding the image.
+ENV WEB_CONCURRENCY=4
+
+CMD ["gunicorn", "main:app", "-k", "uvicorn.workers.UvicornWorker", "-b", "0.0.0.0:8000"]

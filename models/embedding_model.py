@@ -8,6 +8,7 @@ from config import (
     EMBEDDING_MODEL_NORMALIZATION,
 )
 from models import BedrockClient
+from models.embedding_cache import embedding_cache
 
 logging = get_logger(__name__)
 
@@ -20,10 +21,31 @@ class TitanEmbeddingModel(BedrockClient):
             accept=EMBEDDING_MODEL_ACCEPT,
         )
 
-    def generate_embedding(self, text: str, span=None):
+    def generate_embedding(self, text: str, span=None, use_cache: bool = True):
         try:
             if not text or not isinstance(text, str):
                 raise ValueError("Input text must be a non-empty string.")
+
+            # An embedding is a pure function of (model, text), so a repeat
+            # question can reuse the vector instead of paying for another
+            # Bedrock round trip on the critical path.
+            if use_cache:
+                cached = embedding_cache.get(self.model_id, text)
+                if cached is not None:
+                    logging.info("Embedding served from cache for: %s", text)
+                    if span:
+                        span.set_attributes(
+                            {
+                                "llm.input_messages.0.message.role": "system",
+                                "llm.input_messages.0.message.content": str(text),
+                                "embedding.cache_hit": True,
+                                # No tokens are charged on a cache hit, so the
+                                # counts are left at zero deliberately.
+                                "llm.token_count.prompt": 0,
+                                "llm.token_count.total": 0,
+                            }
+                        )
+                    return cached
 
             payload = {
                 "inputText": text,
@@ -40,6 +62,7 @@ class TitanEmbeddingModel(BedrockClient):
                     {
                         "llm.input_messages.0.message.role": "system",
                         "llm.input_messages.0.message.content": str(payload),
+                        "embedding.cache_hit": False,
                     }
                 )
 
@@ -64,6 +87,9 @@ class TitanEmbeddingModel(BedrockClient):
                 )
                 logging.error("Failed to retrieve embedding for input:", exc_info=True)
                 raise RuntimeError("No embedding data returned by AWS Bedrock.")
+
+            if use_cache:
+                embedding_cache.put(self.model_id, text, embedding)
 
             return embedding
         except Exception as e:

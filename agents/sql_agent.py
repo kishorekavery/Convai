@@ -2,13 +2,30 @@ from fastapi import status, HTTPException
 import time
 import asyncio
 import functools
+from typing import NamedTuple
 
 ## Internal Packages
 from config import get_logger
-from database import execute_ai_generated_sql, format_sql_query
+from database import execute_ai_generated_sql, format_sql_query, clean_sql_query
+from models import get_bedrock_executor
 
 ## Initiate Logger
 logging = get_logger(__name__)
+
+
+class SqlAgentResult(NamedTuple):
+    """
+    What the SQL agent produced for one request.
+
+    ``sql_template`` keeps the <facilitycode> placeholder unsubstituted so that
+    follow-up pagination can re-substitute it against the *current* request's
+    facility codes; ``executed_sql`` is the validated statement that actually
+    ran.
+    """
+
+    sql_template: str
+    executed_sql: str
+    rows: list
 
 
 async def sql_agent(
@@ -36,7 +53,7 @@ async def sql_agent(
     ctx_copied = contextvars.copy_context()
     sql_result = await asyncio.gather(
         event_loop.run_in_executor(
-            None,
+            get_bedrock_executor(),
             ctx_copied.run,
             functools.partial(_sql_generation, sql_generation_prompt, span),
         )
@@ -66,7 +83,11 @@ async def sql_agent(
         )
 
     from database.sql_safety import validate_sql
-    
+
+    # Fence-stripped but placeholder-preserving, so pagination can re-scope it
+    # to whatever facility codes the follow-up request carries.
+    sql_template = clean_sql_query(raw_sql).strip().rstrip(";").strip()
+
     sql = format_sql_query(raw_sql, facm_code)
     if (
         sql == "SELECT 'User request cannot be fulfilled.';"
@@ -99,4 +120,6 @@ async def sql_agent(
             headers={"X-Response-Time": f"{process_time:.6f} seconds"},
         )
 
-    return await execute_ai_generated_sql(sql, client_dbconnection_pool)
+    rows = await execute_ai_generated_sql(sql, client_dbconnection_pool)
+
+    return SqlAgentResult(sql_template=sql_template, executed_sql=sql, rows=rows)
