@@ -4,10 +4,37 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Database Connection Details
-DB_USERNAME = os.getenv("DB_USERNAME")
-DB_PASSWORD = os.getenv("DB_PASSWORD")
-DB_HOST = os.getenv("DB_HOST")
-DB_PORT = os.getenv("DB_PORT")
+DB_SECRET_NAME = os.getenv("DB_SECRET_NAME")
+db_config = {}
+
+if DB_SECRET_NAME:
+    try:
+        import boto3
+        import json
+        secrets_kwargs = {}
+        
+        # Read AWS configuration for Secrets Manager explicitly here
+        aws_region = os.getenv("AWS_REGION")
+        aws_access_key = os.getenv("AWS_ACCESS_KEY")
+        aws_secret_key = os.getenv("AWS_SECRET_KEY")
+
+        if aws_region:
+            secrets_kwargs["region_name"] = aws_region
+        if aws_access_key and aws_secret_key:
+            secrets_kwargs["aws_access_key_id"] = aws_access_key
+            secrets_kwargs["aws_secret_access_key"] = aws_secret_key
+
+        client = boto3.client("secretsmanager", **secrets_kwargs)
+        secret_value = client.get_secret_value(SecretId=DB_SECRET_NAME)
+        if "SecretString" in secret_value:
+            db_config = json.loads(secret_value["SecretString"])
+    except Exception as e:
+        raise RuntimeError(f"Failed to retrieve database secrets from Secrets Manager ({DB_SECRET_NAME}): {e}")
+
+DB_USERNAME = os.getenv("DB_USERNAME") or db_config.get("username") or db_config.get("DB_USERNAME")
+DB_PASSWORD = os.getenv("DB_PASSWORD") or db_config.get("password") or db_config.get("DB_PASSWORD")
+DB_HOST = os.getenv("DB_HOST") or db_config.get("host")
+DB_PORT = os.getenv("DB_PORT") or db_config.get("port")
 # Per-database connection pool sizing (one shared pool per database, per worker).
 # Budget constraint to respect:
 #   WEB_CONCURRENCY x (num_client_dbs + 1 knowledgebase) x DB_MAX_CONN

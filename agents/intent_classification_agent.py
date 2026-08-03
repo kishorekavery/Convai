@@ -64,6 +64,8 @@ def intent_classification(user_input, chat_history, CLASSIFICATION_MODEL_ID, spa
             action = "return_greeting"
         elif classification_type == "rejected":
             action = "return_rejection_response"
+        elif classification_type == "follow_up_pagination":
+            action = "follow_up_pagination"
         else:
             raise ValueError(f"Unexpected type: {classification_type}")
 
@@ -71,7 +73,11 @@ def intent_classification(user_input, chat_history, CLASSIFICATION_MODEL_ID, spa
             f"Classification result: {classification_type}, Message: {message}, Action: {action}"
         )
 
-        return {"type": classification_type, "message": message, "action": action}
+        return {
+            "type": classification_type, 
+            "message": message, 
+            "action": action
+        }
 
     except json.JSONDecodeError as e:
         logging.error(f"JSON decoding error: {str(e)}")

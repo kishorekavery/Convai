@@ -1,6 +1,6 @@
 services:
   convai-app:
-    image: kishore710/convai-app:latest
+    image: convai-app:latest
     container_name: convai-service
     ports:
       - "8000:8000"
@@ -9,3 +9,19 @@ services:
     volumes:
       - ./logs:/app/logs
     restart: always
+
+  phoenix:
+    image: arizephoenix/phoenix:latest
+    container_name: arize-phoenix
+    ports:
+      - "6006:6006"   # Phoenix UI & HTTP
+      - "4317:4317"   # OTLP gRPC receiver
+      - "4318:4318"   # OTLP HTTP receiver
+    environment:
+      - PHOENIX_ENABLE_AUTH=true
+      # Set PHOENIX_SECRET and PHOENIX_ADMIN_PASSWORD in .env - the defaults
+      # below are placeholders and must not be used outside local development.
+      - PHOENIX_SECRET=${PHOENIX_SECRET:-changeme}
+      - PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD=${PHOENIX_ADMIN_PASSWORD:-changeme}
+      - PHOENIX_SQL_DATABASE_URL=postgresql://${DB_USERNAME}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME:-askailogs}
+    restart: unless-stopped

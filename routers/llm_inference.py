@@ -48,6 +48,9 @@ from responses import StreamingResponse
 ## Initiate Logger
 logging = get_logger(__name__)
 
+# In-memory cache to store the last generated SQL per user for pagination
+user_query_cache = {}
+
 
 def _split_context_examples(context: str) -> list:
     """
@@ -65,8 +68,10 @@ def _split_context_examples(context: str) -> list:
 
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.resources import Resource
-from phoenix.otel.otel import SimpleSpanProcessor as PhoenixSimpleSpanProcessor
-from phoenix.otel.otel import BatchSpanProcessor as PhoenixBatchSpanProcessor
+# from phoenix.otel.otel import SimpleSpanProcessor as PhoenixSimpleSpanProcessor
+# from phoenix.otel.otel import BatchSpanProcessor as PhoenixBatchSpanProcessor
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry import trace as otel_trace
 
 tracer_provider = TracerProvider(
@@ -97,28 +102,21 @@ class DynamicProjectProcessor(SpanProcessor):
 #    routing is preserved under both Simple and Batch processors.
 tracer_provider.add_span_processor(DynamicProjectProcessor())
 
-# 2. Add the Phoenix exporter SECOND.
-#    BatchSpanProcessor (default, gated by PHOENIX_BATCH) buffers spans and
-#    exports them on a background thread, keeping the blocking HTTP export off
-#    the request path / event loop. SimpleSpanProcessor exports synchronously on
-#    every span.end() and is kept only as an opt-out for debugging.
+# 2. Add the gRPC Phoenix exporter SECOND.
 _phoenix_exporter_headers = (
-    {"Authorization": f"Bearer {PHOENIX_API_KEY}"} if PHOENIX_API_KEY else {}
+    {"authorization": f"Bearer {PHOENIX_API_KEY}"} if PHOENIX_API_KEY else {}
 )
+
+# Use standard gRPC OTLPSpanExporter for low latency
+grpc_exporter = OTLPSpanExporter(
+    endpoint=COLLECTOR_ENDPOINT,
+    headers=_phoenix_exporter_headers,
+)
+
 if PHOENIX_BATCH:
-    tracer_provider.add_span_processor(
-        PhoenixBatchSpanProcessor(
-            endpoint=COLLECTOR_ENDPOINT,
-            headers=_phoenix_exporter_headers,
-        )
-    )
+    tracer_provider.add_span_processor(BatchSpanProcessor(grpc_exporter))
 else:
-    tracer_provider.add_span_processor(
-        PhoenixSimpleSpanProcessor(
-            endpoint=COLLECTOR_ENDPOINT,
-            headers=_phoenix_exporter_headers,
-        )
-    )
+    tracer_provider.add_span_processor(SimpleSpanProcessor(grpc_exporter))
 
 # Set the global tracer provider manually since we bypass `register`
 otel_trace.set_tracer_provider(tracer_provider)
@@ -245,6 +243,11 @@ async def chat_completion(
         token_usage["completion_tokens"] += s1_completion
         token_usage["total_tokens"] += (s1_prompt + s1_completion)
         
+        # Guard rail: if it's pagination but there's no chat history to paginate
+        if intent["action"] == "follow_up_pagination" and not chat_history:
+            intent["action"] = "return_rejection_response"
+            intent["message"] = "There is no previous query to paginate. Please ask a new question."
+            
         if intent["action"] == "return_greeting":
             # print("Intent Classification Result:", intent["action"])
             logging.info("Returning greeting response.")
@@ -289,76 +292,99 @@ async def chat_completion(
     ##    Generate Vector of the user input
     ## --------------------------------------------------------------------------------------------------- #
 
-        with tracer.start_as_current_span("2. embedding_generation", context=ctx, kind=SpanKind.CLIENT) as span2:
-            # changed
-            # span2.set_attributes({
-            #     SpanAttributes.OPENINFERENCE_SPAN_KIND: OpenInferenceSpanKindValues.EMBEDDING.value,
-            #     "info": "Generates embedding of the processed user query",
-            # })
-            span2.set_attributes({
-                SpanAttributes.OPENINFERENCE_SPAN_KIND: OpenInferenceSpanKindValues.EMBEDDING.value,
-                "info": "Generates embedding of the processed user query",
-                SpanAttributes.USER_ID: str(user_id)
-            })
+        # Initialize context variables
+        embedded_user_input = ""
+        table_schema = ""
+        context_for_sql_generation = ""
+        context_for_user_response = ""
 
-            span2.set_attributes({
-                "llm.system": "bedrock",
-                "llm.model_name": str(EMBEDDING_MODEL_ID),
-            })
-            
-            # embedded_user_input = embedding_model.generate_embedding(processed_user_input, span=span2)
-            def _embedding_generation(processed_user_input, span):
-                with trace.use_span(span):
-                    return embedding_model.generate_embedding(processed_user_input, span)
-                
-            embedding_result = await asyncio.gather(loop.run_in_executor(None, 
-                                    functools.partial(_embedding_generation, processed_user_input, span=span2)
-                                    )
-                                )
-            # print('embedding')
-            embedded_user_input = embedding_result[0]
-
-            span2.set_attributes({
-                "llm.output_messages.0.message.role": "assistant",
-                "llm.output_messages.0.message.content":  str(embedded_user_input),
-            })
-
-            span2.set_status(Status(StatusCode.OK))
-        
-        # Collect tokens from span2
-        s2_prompt = int(span2.attributes.get("llm.token_count.prompt") or 0)
-        token_usage["prompt_tokens"] += s2_prompt
-        token_usage["total_tokens"] += s2_prompt
-    
-    ## --------------------------------------------------------------------------------------------------- #
-    ##    Generate SQL for the user input
-    ## --------------------------------------------------------------------------------------------------- #
-
-        ## Retrieve Context for the user input
-        with tracer.start_as_current_span("2b. context_retrieval", context=ctx, kind=SpanKind.CLIENT) as span2b:
-            span2b.set_attributes({
-                SpanAttributes.OPENINFERENCE_SPAN_KIND: OpenInferenceSpanKindValues.RETRIEVER.value,
-                "info": "Vector similarity retrieval of table schema + few-shot examples from the knowledge base",
-                SpanAttributes.USER_ID: str(user_id),
-                SpanAttributes.INPUT_VALUE: str(processed_user_input),
-            })
-
-            table_schema, context_for_sql_generation, context_for_user_response = await fetch_context(str(embedded_user_input), tableschema_dbconnection_pool=pool)
-
-            ## Logging info when no context is retrieved
-            if not table_schema or not context_for_sql_generation or not context_for_user_response:
-                logging.warning("No context available for the given user input: %s", processed_user_input)
-
-            span2b.set_attribute("retrieval.table_schema", str(table_schema))
-
-            for doc_index, example_doc in enumerate(_split_context_examples(context_for_sql_generation)):
-                span2b.set_attribute(
-                    f"{SpanAttributes.RETRIEVAL_DOCUMENTS}.{doc_index}.{DocumentAttributes.DOCUMENT_CONTENT}",
-                    example_doc,
+        if intent["action"] == "follow_up_pagination":
+            logging.info("Follow-up pagination intent detected. Bypassing context retrieval.")
+            table_schema = "Refer to chat history for previous query and schema."
+            previous_sql = user_query_cache.get(user_id, "")
+            if previous_sql:
+                context_for_sql_generation = (
+                    f"Previous Query Executed for this user:\n{previous_sql}\n\n"
+                    "Instruction: Use the EXACT same SQL query from above but add or increase the OFFSET clause (e.g., OFFSET 50) based on the user's request.\n\n"
+                    "Example 1 - \n"
+                    "User: show me the next 50\n"
+                    "Previous Query Executed: SELECT wo_id, wo_status FROM work_orders LIMIT 50\n"
+                    "Assistant: SELECT wo_id, wo_status FROM work_orders LIMIT 50 OFFSET 50\n\n"
+                    "Example 2 - \n"
+                    "User: next page please\n"
+                    "Previous Query Executed: SELECT wo_id, wo_status FROM work_orders LIMIT 50 OFFSET 50\n"
+                    "Assistant: SELECT wo_id, wo_status FROM work_orders LIMIT 50 OFFSET 100\n"
                 )
+            else:
+                context_for_sql_generation = ""
+            context_for_user_response = ""
+            
+        else:
+        # End of else block
+            with tracer.start_as_current_span("2. embedding_generation", context=ctx, kind=SpanKind.CLIENT) as span2:
+                span2.set_attributes({
+                    SpanAttributes.OPENINFERENCE_SPAN_KIND: OpenInferenceSpanKindValues.EMBEDDING.value,
+                    "info": "Generates embedding of the processed user query",
+                    SpanAttributes.USER_ID: str(user_id)
+                })
 
-            span2b.set_status(Status(StatusCode.OK))
+                span2.set_attributes({
+                    "llm.system": "bedrock",
+                    "llm.model_name": str(EMBEDDING_MODEL_ID),
+                })
+            
+                def _embedding_generation(processed_user_input, span):
+                    with trace.use_span(span):
+                        return embedding_model.generate_embedding(processed_user_input, span)
+                
+                embedding_result = await asyncio.gather(loop.run_in_executor(None, 
+                                        functools.partial(_embedding_generation, processed_user_input, span=span2)
+                                        )
+                                    )
+                embedded_user_input = embedding_result[0]
+
+                span2.set_attributes({
+                    "llm.output_messages.0.message.role": "assistant",
+                    "llm.output_messages.0.message.content":  str(embedded_user_input),
+                })
+
+                span2.set_status(Status(StatusCode.OK))
         
+            # Collect tokens from span2
+            s2_prompt = int(span2.attributes.get("llm.token_count.prompt") or 0)
+            token_usage["prompt_tokens"] += s2_prompt
+            token_usage["total_tokens"] += s2_prompt
+    
+        ## --------------------------------------------------------------------------------------------------- #
+        ##    Generate SQL for the user input
+        ## --------------------------------------------------------------------------------------------------- #
+
+            ## Retrieve Context for the user input
+            with tracer.start_as_current_span("2b. context_retrieval", context=ctx, kind=SpanKind.CLIENT) as span2b:
+                span2b.set_attributes({
+                    SpanAttributes.OPENINFERENCE_SPAN_KIND: OpenInferenceSpanKindValues.RETRIEVER.value,
+                    "info": "Vector similarity retrieval of table schema + few-shot examples from the knowledge base",
+                    SpanAttributes.USER_ID: str(user_id),
+                    SpanAttributes.INPUT_VALUE: str(processed_user_input),
+                })
+
+                table_schema, context_for_sql_generation, context_for_user_response = await fetch_context(str(embedded_user_input), tableschema_dbconnection_pool=pool)
+
+                ## Logging info when no context is retrieved
+                if not table_schema or not context_for_sql_generation or not context_for_user_response:
+                    logging.warning("No context available for the given user input: %s", processed_user_input)
+
+                span2b.set_attribute("retrieval.table_schema", str(table_schema))
+
+                for doc_index, example_doc in enumerate(_split_context_examples(context_for_sql_generation)):
+                    span2b.set_attribute(
+                        f"{SpanAttributes.RETRIEVAL_DOCUMENTS}.{doc_index}.{DocumentAttributes.DOCUMENT_CONTENT}",
+                        example_doc,
+                    )
+
+                span2b.set_status(Status(StatusCode.OK))
+        
+
         user_details = await fetch_user_details(user_id, pool)
         
         with tracer.start_as_current_span("3. sql_generation", context=ctx, kind=SpanKind.CLIENT) as span3:
@@ -380,7 +406,7 @@ async def chat_completion(
             
             span3.set_attributes({
                 "llm.system": "bedrock",
-                "llm.model_name": str(CHAT_MODEL_ID),
+                "llm.model_name": str(SQL_MODEL_ID),
                 "llm.input_messages.0.message.role": "system",
                 "llm.input_messages.0.message.content":  str(sql_generation_prompt)
             })
@@ -400,93 +426,98 @@ async def chat_completion(
                     "sql.row_count": num_rows,
                     "sql.columns_count": num_cols,
                 })
-            
-            # Return if large data > 500 values is passed
-            if num_cols * num_rows > 500:
-                logging.info(
-                    "Result set too large (%s rows x %s cols). Generating refinement guidance.",
-                    num_rows, num_cols,
-                )
-
-                # SQL generated for this request (set on span3 by sql_agent); used only for reasoning
-                generated_sql = str(span3.attributes.get("llm.output_messages.0.message.content") or "")
-
-                # Static fallback used if the refinement LLM call fails
-                large_volume_response = "The data set for your request is too large to process in one go. Please refine your query (e.g., by selecting a specific facility, time range, equipment, or limiting the record count)."
-
-                with tracer.start_as_current_span("3b. large_volume_refine", context=ctx, kind=SpanKind.CLIENT) as span3b:
-                    span3b.set_attributes({
-                        SpanAttributes.OPENINFERENCE_SPAN_KIND: OpenInferenceSpanKindValues.LLM.value,
-                        "info": "LLM call to generate refinement guidance for an over-limit result set",
-                        SpanAttributes.USER_ID: str(user_id),
-                    })
-
-                    refine_prompt = format_large_volume_refine_prompt(
-                        raw_user_input, generated_sql, num_rows, num_cols,
-                    )
-
-                    span3b.set_attributes({
-                        "llm.system": "bedrock",
-                        "llm.model_name": str(CHAT_MODEL_ID),
-                        "llm.input_messages.0.message.role": "system",
-                        "llm.input_messages.0.message.content": str(refine_prompt),
-                    })
-
-                    try:
-                        def _refine_generation(prompt, span):
-                            with trace.use_span(span):
-                                return chat_generation_model.generate_response(prompt, span=span)
-
-                        refine_result = await asyncio.gather(
-                            loop.run_in_executor(
-                                None,
-                                functools.partial(_refine_generation, refine_prompt, span=span3b),
-                            )
-                        )
-                        refined_text = refine_result[0]
-                        if refined_text and isinstance(refined_text, str) and refined_text.strip():
-                            large_volume_response = refined_text.strip()
-
-                        span3b.set_attributes({
-                            "llm.output_messages.0.message.role": "assistant",
-                            "llm.output_messages.0.message.content": str(large_volume_response),
-                        })
-                        span3b.set_status(Status(StatusCode.OK))
-                    except Exception as refine_exc:
-                        logging.error("Refinement generation failed, using static message: %s", refine_exc)
-                        span3b.record_exception(refine_exc)
-                        span3b.set_status(Status(StatusCode.ERROR, description=str(refine_exc)))
-
-                    # Collect tokens from span3b
-                    s3b_prompt = int(span3b.attributes.get("llm.token_count.prompt") or 0)
-                    s3b_completion = int(span3b.attributes.get("llm.token_count.completion") or 0)
-                    token_usage["prompt_tokens"] += s3b_prompt
-                    token_usage["completion_tokens"] += s3b_completion
-                    token_usage["total_tokens"] += (s3b_prompt + s3b_completion)
-
-                logging.info("Context length exceeded. Return Response: %s", large_volume_response)
-                process_time = time.time() - start_time
-                parent_span.set_attribute(SpanAttributes.OUTPUT_VALUE, large_volume_response)
-                parent_span.set_status(Status(StatusCode.OK))
-                parent_span.end()
-
-                # Collect tokens from span3
-                s3_prompt = int(span3.attributes.get("llm.token_count.prompt") or 0)
-                s3_completion = int(span3.attributes.get("llm.token_count.completion") or 0)
-                token_usage["prompt_tokens"] += s3_prompt
-                token_usage["completion_tokens"] += s3_completion
-                token_usage["total_tokens"] += (s3_prompt + s3_completion)
                 
-                async with pool.acquire() as conn:
-                    await conn.execute(UPDATE_USER_QUOTA_USAGE, int(user_id), token_usage["total_tokens"])
-                    logging.info(f"User Quota Updated for large volume response. Spent: {token_usage['total_tokens']} tokens.")
-                    
-                return Response(
-                    status_code=status.HTTP_200_OK,
-                    content=large_volume_response,
-                    headers={"X-Response-Time": f"{process_time:.6f} seconds"},
-                    media_type="text/plain"
+            # Save the generated SQL to the cache for future pagination requests
+            generated_sql_for_cache = str(span3.attributes.get("llm.output_messages.0.message.content") or "")
+            if generated_sql_for_cache:
+                user_query_cache[user_id] = generated_sql_for_cache
+        
+        # Return if large data > 500 values is passed
+        if num_cols * num_rows > 500:
+            logging.info(
+                "Result set too large (%s rows x %s cols). Generating refinement guidance.",
+                num_rows, num_cols,
+            )
+
+            # SQL generated for this request (set on span3 by sql_agent); used only for reasoning
+            generated_sql = str(span3.attributes.get("llm.output_messages.0.message.content") or "")
+
+            # Static fallback used if the refinement LLM call fails
+            large_volume_response = "The data set for your request is too large to process in one go. Please refine your query (e.g., by selecting a specific facility, time range, equipment, or limiting the record count)."
+
+            with tracer.start_as_current_span("3b. large_volume_refine", context=ctx, kind=SpanKind.CLIENT) as span3b:
+                span3b.set_attributes({
+                    SpanAttributes.OPENINFERENCE_SPAN_KIND: OpenInferenceSpanKindValues.LLM.value,
+                    "info": "LLM call to generate refinement guidance for an over-limit result set",
+                    SpanAttributes.USER_ID: str(user_id),
+                })
+
+                refine_prompt = format_large_volume_refine_prompt(
+                    raw_user_input, generated_sql, num_rows, num_cols,
                 )
+
+                span3b.set_attributes({
+                    "llm.system": "bedrock",
+                    "llm.model_name": str(SQL_MODEL_ID),
+                    "llm.input_messages.0.message.role": "system",
+                    "llm.input_messages.0.message.content": str(refine_prompt),
+                })
+
+                try:
+                    def _refine_generation(prompt, span):
+                        with trace.use_span(span):
+                            return sql_generation_model.generate_response(prompt, span=span)
+
+                    refine_result = await asyncio.gather(
+                        loop.run_in_executor(
+                            None,
+                            functools.partial(_refine_generation, refine_prompt, span=span3b),
+                        )
+                    )
+                    refined_text = refine_result[0]
+                    if refined_text and isinstance(refined_text, str) and refined_text.strip():
+                        large_volume_response = refined_text.strip()
+
+                    span3b.set_attributes({
+                        "llm.output_messages.0.message.role": "assistant",
+                        "llm.output_messages.0.message.content": str(large_volume_response),
+                    })
+                    span3b.set_status(Status(StatusCode.OK))
+                except Exception as refine_exc:
+                    logging.error("Refinement generation failed, using static message: %s", refine_exc)
+                    span3b.record_exception(refine_exc)
+                    span3b.set_status(Status(StatusCode.ERROR, description=str(refine_exc)))
+
+                # Collect tokens from span3b
+                s3b_prompt = int(span3b.attributes.get("llm.token_count.prompt") or 0)
+                s3b_completion = int(span3b.attributes.get("llm.token_count.completion") or 0)
+                token_usage["prompt_tokens"] += s3b_prompt
+                token_usage["completion_tokens"] += s3b_completion
+                token_usage["total_tokens"] += (s3b_prompt + s3b_completion)
+
+            logging.info("Context length exceeded. Return Response: %s", large_volume_response)
+            process_time = time.time() - start_time
+            parent_span.set_attribute(SpanAttributes.OUTPUT_VALUE, large_volume_response)
+            parent_span.set_status(Status(StatusCode.OK))
+            parent_span.end()
+
+            # Collect tokens from span3
+            s3_prompt = int(span3.attributes.get("llm.token_count.prompt") or 0)
+            s3_completion = int(span3.attributes.get("llm.token_count.completion") or 0)
+            token_usage["prompt_tokens"] += s3_prompt
+            token_usage["completion_tokens"] += s3_completion
+            token_usage["total_tokens"] += (s3_prompt + s3_completion)
+            
+            async with pool.acquire() as conn:
+                await conn.execute(UPDATE_USER_QUOTA_USAGE, int(user_id), token_usage["total_tokens"])
+                logging.info(f"User Quota Updated for large volume response. Spent: {token_usage['total_tokens']} tokens.")
+                
+            return Response(
+                status_code=status.HTTP_200_OK,
+                content=large_volume_response,
+                headers={"X-Response-Time": f"{process_time:.6f} seconds"},
+                media_type="text/plain"
+            )
 
         # Collect tokens from span3
         s3_prompt = int(span3.attributes.get("llm.token_count.prompt") or 0)
@@ -498,7 +529,57 @@ async def chat_completion(
         if table_rows:
             ## Convert each asyncpg Record to a dictionary
             data = [dict(row) for row in table_rows]
-            table_rows = tabulate(data, headers="keys", tablefmt="simple")
+            table_rows_str = tabulate(data, headers="keys", tablefmt="simple")
+        
+            # --- Two-pass check: detect truncated results ---
+            generated_sql = str(span3.attributes.get("llm.output_messages.0.message.content") or "")
+            if num_rows == 50 and "LIMIT" in generated_sql.upper():
+                with tracer.start_as_current_span("3c. truncation_check", context=ctx, kind=SpanKind.CLIENT) as span3c:
+                    span3c.set_attributes({
+                        SpanAttributes.OPENINFERENCE_SPAN_KIND: OpenInferenceSpanKindValues.RETRIEVER.value,
+                        "info": "Fallback COUNT query to detect truncated results",
+                        SpanAttributes.USER_ID: str(user_id),
+                    })
+                    import re
+                    # Extract SQL from markdown code blocks if present
+                    clean_sql = generated_sql.strip()
+                    match = re.search(r'```(?:sql)?\s*(.*?)\s*```', clean_sql, re.DOTALL | re.IGNORECASE)
+                    if match:
+                        clean_sql = match.group(1).strip()
+                    
+                    # Strip trailing semicolon from the inner query
+                    clean_sql = re.sub(r';\s*$', '', clean_sql)
+                
+                    # Naive removal of LIMIT clause for count
+                    count_sql = re.sub(r'(?i)\bLIMIT\s+\d+', '', clean_sql)
+                    count_sql = f"SELECT COUNT(*) FROM ({count_sql}) AS _count_sub"
+                
+                    if facm_code:
+                        facm_code_str = ",".join(f"'{code}'" for code in facm_code)
+                        count_sql = re.sub(r"'<facilitycode>'|<facilitycode>", facm_code_str, count_sql)
+                
+                    span3c.set_attribute("sql.query", count_sql)
+                
+                    try:
+                        async with pool.acquire() as conn:
+                            total_count = await conn.fetchval(count_sql)
+                    
+                        span3c.set_attribute("sql.total_count", total_count or 0)
+                    
+                        if total_count and total_count > 50:
+                            truncation_note = f"\n\n[SYSTEM NOTE: The query returned {total_count} matching records. Inform the user that only the first 50 records are displayed. Instruct them to reply with 'more' to view the next page.]"
+                            table_rows_str += truncation_note
+                            span3c.set_attribute("truncation.detected", True)
+                        else:
+                            span3c.set_attribute("truncation.detected", False)
+                    
+                        span3c.set_status(Status(StatusCode.OK))
+                    except Exception as e:
+                        logging.warning(f"Failed to fetch total count for truncated results: {e}")
+                        span3c.record_exception(e)
+                        span3c.set_status(Status(StatusCode.ERROR, description=str(e)))
+        
+            table_rows = table_rows_str
     
     ## --------------------------------------------------------------------------------------------------- #
     ##    Generate Final Response for the user input
@@ -522,10 +603,6 @@ async def chat_completion(
                         "llm.model_name": str(CHAT_MODEL_ID),
                         "llm.input_messages.0.message.role": "system",
                         "llm.input_messages.0.message.content":  str(response_to_user_prompt),
-                        # The exact SQL-result context the answer must be grounded in, and the
-                        # raw user question - kept as their own attributes (rather than only
-                        # embedded in the prompt above) so groundedness evals can read them
-                        # without parsing the full prompt string.
                         "metadata.grounding_context": str(table_rows),
                         "metadata.user_question": str(raw_user_input),
                     })
@@ -610,7 +687,7 @@ async def chat_completion(
 
         api_response = StreamingResponse(traced_stream(ctx, buffer_container), media_type="text/plain", 
                                             parent_span=parent_span, buffer_container=buffer_container, 
-                                            db_pool=pool, user_id=user_id, quoate_usage_update_query=UPDATE_USER_QUOTA_USAGE,
+                                            db_pool=pool, user_id=user_id, quota_usage_update_query=UPDATE_USER_QUOTA_USAGE,
                                             logging=logging, token_usage=token_usage)
         
         api_response.headers["X-Response-Time"] = f"{process_time:.6f} seconds"

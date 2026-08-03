@@ -34,6 +34,12 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
+ENV TZ="Asia/Kolkata"
+
+# Install tzdata and set timezone
+RUN apt-get update && apt-get install -y --no-install-recommends tzdata \
+    && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone \
+    && rm -rf /var/lib/apt/lists/*
 
 # Ensure we use the virtualenv from the builder stage
 ENV PATH="/opt/venv/bin:$PATH"
@@ -49,6 +55,10 @@ COPY . .
 
 # Expose the application port
 EXPOSE 8000
+
+# Healthcheck to verify the server is running
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
 
 # Command to run the application using gunicorn with 9 uvicorn workers.
 # This replaces the single-process `uvicorn` to allow maximum concurrency

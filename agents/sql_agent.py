@@ -65,6 +65,8 @@ async def sql_agent(
             headers={"X-Response-Time": f"{process_time:.6f} seconds"},
         )
 
+    from database.sql_safety import validate_sql
+    
     sql = format_sql_query(raw_sql, facm_code)
     if (
         sql == "SELECT 'User request cannot be fulfilled.';"
@@ -81,6 +83,19 @@ async def sql_agent(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="User request cannot be fulfilled.",
+            headers={"X-Response-Time": f"{process_time:.6f} seconds"},
+        )
+
+    # VERY IMPORTANT: Validate the AI-generated SQL for safety (No DROP, UPDATE, DELETE, or multiple statements)
+    try:
+        sql = validate_sql(sql)
+    except ValueError as safety_error:
+        logging.error(f"SQL Safety Validation Failed: {safety_error} | Raw SQL: {sql}")
+        process_time = time.time() - start_time
+        span.record_exception(safety_error)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="The AI generated a potentially unsafe SQL query.",
             headers={"X-Response-Time": f"{process_time:.6f} seconds"},
         )
 

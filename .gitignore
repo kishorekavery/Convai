@@ -44,7 +44,14 @@ Thumbs.db
 /deprecated/
 /experiments/
 
+# Local scratch request payloads - may contain real tenant data
+payload.txt
+codebaseoverview.md
+
 #docs 
 /docs
 /.changes/
 /.claude/
+tokenizer.json
+tokenizer.py
+/.learning/

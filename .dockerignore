@@ -41,6 +41,8 @@ experiments/
 test.py
 
 # Build/Dev files not needed in Docker image
+tokenizer.json
+tokenizer.py
 docker-compose.yml
 dockerbuild.sh
 README.md
@@ -48,3 +50,4 @@ README.md
 .claude/
 docs/
 *.md
+.learning/

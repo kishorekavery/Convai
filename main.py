@@ -40,5 +40,10 @@ def root():
     return {"message": "Server is up & running"}
 
 
+@app.get("/health")
+def health_check():
+    return {"status": "ok"}
+
+
 app.include_router(llm_inference.router)
 app.include_router(get_logs.router)

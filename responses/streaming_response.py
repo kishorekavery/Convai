@@ -1,30 +1,5 @@
 """
-This is a reimplementation of the FastAPI Responses file with modifications in the StreamingResponse class.
-
-[IMPORTANT] Things to Remember:
-    **If the FastAPI version is changed, make sure the reimplement the changes in the new version's Responses file**
-
-Original File Import Statement:
-    from fastapi.responses import StreamingResponse
-
-Modified File Import Statement:
-    from responses.streaming_response import CustomStreamingResponse as StreamingResponse
-
-Modifications Done:
-    - Opentelemetry Tracing of Parent Span for StreamingResponse
-    - Update User AI Quota after the streaming ends
-
-FastAPI Version Details:
-    Name: fastapi
-    Version: 0.115.11
-    Summary: FastAPI framework, high performance, easy to learn, fast to code, ready for production
-    Home-page: https://github.com/fastapi/fastapi
-    Author:
-    Author-email: =?utf-8?q?Sebasti=C3=A1n_Ram=C3=ADrez?= <tiangolo@gmail.com>
-    License:
-    Location: /Users/presanth/Code/-Working/async-convai-bedrock-arize-quota/.venv/lib/python3.12/site-packages
-    Requires: pydantic, starlette, typing-extensions
-    Required-by:
+Custom Starlette StreamingResponse wrapper with OpenTelemetry parent span tracking and post-stream database quota deduction.
 """
 
 from __future__ import annotations
@@ -52,7 +27,7 @@ class CustomStreamingResponse(StreamingResponse):
         content: ContentStream,
         db_pool,
         user_id,
-        quoate_usage_update_query,
+        quota_usage_update_query,
         parent_span,
         buffer_container,
         logging,
@@ -71,7 +46,7 @@ class CustomStreamingResponse(StreamingResponse):
         )
         self.pool = db_pool
         self.user_id = user_id
-        self.quoate_usage_update_query = quoate_usage_update_query
+        self.quota_usage_update_query = quota_usage_update_query
         self.parent_span = parent_span
         self.buffer_container = buffer_container
         self.logging = logging
@@ -79,20 +54,20 @@ class CustomStreamingResponse(StreamingResponse):
 
     async def _update_user_quota(self):
         """
-        Updates the user AI quota after the final response
+        Updates the user AI quota in PostgreSQL after response stream completion.
         """
-
-        async with self.pool.acquire() as conn:
-            # await conn.execute(self.quoate_usage_update_query, int(self.user_id))
-            # self.logging.info("User Quota Updated after final response generation")
-            await conn.execute(
-                self.quoate_usage_update_query,
-                int(self.user_id),
-                self.token_usage["total_tokens"],
-            )
-            self.logging.info(
-                f"User Quota Updated after final response generation. Spent: {self.token_usage['total_tokens']} tokens."
-            )
+        try:
+            async with self.pool.acquire() as conn:
+                await conn.execute(
+                    self.quota_usage_update_query,
+                    int(self.user_id),
+                    self.token_usage.get("total_tokens", 0),
+                )
+                self.logging.info(
+                    f"User Quota Updated after final response generation. Spent: {self.token_usage.get('total_tokens', 0)} tokens."
+                )
+        except Exception as e:
+            self.logging.error(f"Failed to update user quota in database: {e}")
 
     async def stream_response(self, send: Send) -> None:
 
@@ -115,7 +90,6 @@ class CustomStreamingResponse(StreamingResponse):
 
             await send({"type": "http.response.body", "body": b"", "more_body": False})
 
-            # changed
             # Enable if user quota usage has to be updated after final response
             update_quota_after_final_response = True
             await asyncio.shield(self._update_user_quota())
@@ -125,8 +99,12 @@ class CustomStreamingResponse(StreamingResponse):
             self.parent_span.set_status(Status(StatusCode.ERROR, description=str(e)))
             raise
         finally:
+            full_output = "".join(
+                c if isinstance(c, str) else c.decode("utf-8", errors="ignore")
+                for c in self.buffer_container
+            )
             self.parent_span.set_attribute(
-                SpanAttributes.OUTPUT_VALUE, "".join(self.buffer_container)
+                SpanAttributes.OUTPUT_VALUE, full_output
             )
 
             if update_quota_after_final_response:
@@ -146,3 +124,4 @@ class CustomStreamingResponse(StreamingResponse):
                     )
 
             self.parent_span.end()
+
