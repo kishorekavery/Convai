@@ -1,0 +1,94 @@
+# Local testing stack for the Convai API.
+#
+# Separate from docker-compose.yml, which pulls a published image and is the
+# deployment file. This one BUILDS from the working tree, so a code change can
+# be tested without a build-and-push round trip to Docker Hub.
+#
+#   docker compose -f docker-compose.local.yml up -d --build   # start
+#   docker compose -f docker-compose.local.yml logs -f         # follow
+#   docker compose -f docker-compose.local.yml down -v         # stop, drop logs
+#
+# Reads .env for credentials, exactly as production does.
+#
+# ---------------------------------------------------------------------------
+# Tracing is opt-in. Without it the app still starts, but every span export
+# fails and logs an error, because COLLECTOR_ENDPOINT points at a Phoenix that
+# is not running. To include it:
+#
+#   docker compose -f docker-compose.local.yml --profile tracing up -d --build
+#
+# ---------------------------------------------------------------------------
+# The chat UI works against this without any change: it defaults to
+# host.docker.internal:8000, which is what this publishes.
+#
+#   cd chat-ui && docker compose -f docker-compose.chatui.yml up -d --build
+# ---------------------------------------------------------------------------
+
+services:
+  convai-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: convai-app:local
+    container_name: convai-local
+    ports:
+      - "${LOCAL_API_PORT:-8000}:8000"
+    env_file:
+      - .env
+    environment:
+      # Explicit rather than inherited, so local behaviour does not drift with
+      # whatever happens to be in .env.
+      - WEB_CONCURRENCY=${WEB_CONCURRENCY:-1}
+      - DB_MIN_CONN=${DB_MIN_CONN:-0}
+      - DB_MAX_CONN=${DB_MAX_CONN:-4}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # Off by default here as in production; set to true when debugging a
+      # specific generation and you want the full prompt in the log.
+      - LOG_PROMPTS=${LOG_PROMPTS:-false}
+      # Pinned here rather than inherited from .env, so the two knowledge base
+      # tables can be compared without editing a credentials file:
+      #   KB_TABLE=knowledge_base_examples docker compose -f docker-compose.local.yml up -d
+      - KNOWLEDGEBASE_TABLE=${KB_TABLE:-knowlegebaseexamples_new}
+    volumes:
+      # A NAMED volume, not ./logs. The container runs as uid 10001 while the
+      # host directory is owned by the developer, so a bind mount is not
+      # writable without a chown. Docker seeds a fresh named volume from the
+      # image, which already has /app/logs owned by convai - so this just works.
+      # Read them with `docker compose ... exec convai-app cat /app/logs/application.log`.
+      - convai-local-logs:/app/logs
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/convai/health')"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
+
+  # Opt-in: --profile tracing
+  phoenix:
+    profiles: ["tracing"]
+    image: arizephoenix/phoenix:latest
+    container_name: convai-local-phoenix
+    ports:
+      - "${LOCAL_PHOENIX_UI_PORT:-6006}:6006"
+      - "${LOCAL_PHOENIX_GRPC_PORT:-4317}:4317"
+    environment:
+      # Auth off locally - this is a throwaway instance, and turning it on means
+      # managing a secret for something that lives for the length of a test.
+      - PHOENIX_ENABLE_AUTH=false
+      # In-memory: no external Postgres, and nothing to clean up afterwards.
+      - PHOENIX_WORKING_DIR=/tmp/phoenix
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
+
+volumes:
+  convai-local-logs:
