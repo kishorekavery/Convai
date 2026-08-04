@@ -23,6 +23,7 @@ from phoenix.otel import register
 # from routers import user_quota_limiter
 
 from config import get_logger
+from config import new_error_reference, client_error_detail
 from config import EMBEDDING_MODEL_ID, CHAT_MODEL_ID, CLASSIFICATION_MODEL_ID
 from config import COLLECTOR_ENDPOINT, COLLECTOR_PROJECT_NAME, PHOENIX_API_KEY, PHOENIX_BATCH
 from config import validate_collector_endpoint
@@ -920,11 +921,18 @@ async def chat_completion(
         except Exception as e_quota:
             logging.error(f"Failed to update user quota on Exception: {e_quota}")
 
-        logging.error("HTTP Exception. Status Code: %s Error: %s",status.HTTP_500_INTERNAL_SERVER_ERROR,{str(e)})
+        # The reference ties this log line, the span and the client's message
+        # together, so the full traceback stays server-side without losing the
+        # ability to investigate a specific report.
+        ref = new_error_reference()
+        logging.error("[%s] Unhandled error in chat_completion", ref, exc_info=True)
+        parent_span.set_attribute("error.reference", ref)
         parent_span.record_exception(e)
         parent_span.set_status(Status(StatusCode.ERROR, description=str(e)))
         parent_span.end()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"An unexpected error occurred: {str(e)}"
+            detail=client_error_detail(
+                "Something went wrong while answering that question.", ref
+            ),
         )

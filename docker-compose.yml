@@ -1,6 +1,9 @@
 services:
   convai-app:
-    image: convai-app:latest
+    # Pinned, not :latest - otherwise "what is actually running" is unanswerable
+    # and a rollback has nothing to roll back to. Override with
+    # APP_VERSION=v8 docker compose up -d
+    image: convai-app:${APP_VERSION:-v9}
     container_name: convai-service
     ports:
       - "8000:8000"

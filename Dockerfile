@@ -44,14 +44,30 @@ RUN apt-get update && apt-get install -y --no-install-recommends tzdata \
 # Ensure we use the virtualenv from the builder stage
 ENV PATH="/opt/venv/bin:$PATH"
 
+# Run as a non-root user. A container escape or a compromised dependency then
+# lands on an unprivileged account rather than root.
+#
+# The uid is fixed rather than auto-assigned because ./logs is bind-mounted from
+# the host: the host directory must be writable by this uid, and a stable number
+# makes that a one-time `chown -R 10001 logs` instead of a moving target.
+RUN groupadd --gid 10001 convai \
+    && useradd --uid 10001 --gid convai --no-create-home --shell /usr/sbin/nologin convai
+
 WORKDIR /app
 
 # Copy the pre-built virtual environment from the builder stage
 # This avoids installing build-essential and other bloat in the final image
 COPY --from=builder /opt/venv /opt/venv
 
-# Copy the application code
-COPY . .
+# Copy the application code, owned by the runtime user
+COPY --chown=convai:convai . .
+
+# The log directory must exist and be writable before dropping privileges -
+# a bind mount inherits the host directory's ownership, so this only covers
+# the case where no volume is mounted.
+RUN mkdir -p /app/logs && chown -R convai:convai /app/logs
+
+USER convai
 
 # Expose the application port
 EXPOSE 8000

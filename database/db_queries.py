@@ -13,6 +13,7 @@ from tabulate import tabulate
 
 ## Internal Packages
 from config import get_logger
+from config import new_error_reference, client_error_detail
 from config import (
     KB_CONTEXT_LIMIT,
     DATA_SCHEMA,
@@ -373,29 +374,35 @@ async def execute_ai_generated_sql(sql: str, pool: Pool):
         )
 
     except exceptions.UndefinedColumnError as e:
-        error_msg = (
-            f"SQL Execution Error: Undefined column '{e.column_name}' in the query."
+        ref = new_error_reference()
+        logging.error(
+            "[%s] Undefined column '%s' in AI-generated SQL: %s", ref, e.column_name, sql
         )
-        logging.error(error_msg)
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=error_msg
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=client_error_detail(
+                "The generated query referenced a column that does not exist.", ref
+            ),
         )
 
     except PostgresError as e:
-        error_msg = f"SQL Execution Error: {str(e)}"
-        logging.error(error_msg)
+        ref = new_error_reference()
+        logging.error("[%s] SQL execution error: %s. SQL: %s", ref, e, sql)
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=error_msg,
+            detail=client_error_detail(
+                "The generated query could not be executed.", ref
+            ),
         )
 
     except Exception:
+        ref = new_error_reference()
         logging.error(
-            "An error occured when executing the AI Generated SQL", exc_info=True
+            "[%s] Unexpected error executing AI-generated SQL", ref, exc_info=True
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Error executing the SQL",
+            detail=client_error_detail("Could not run that query.", ref),
         )
 
 
@@ -452,19 +459,25 @@ async def fetch_user_details(user_id: str, pool: Pool):
         return formated_user_details
 
     except exceptions.UndefinedColumnError as e:
-        error_msg = (
-            f"SQL Execution Error: Undefined column '{e.column_name}' in the query."
+        # This query is written by us, not the model, so a missing column means
+        # the users_m schema has drifted - worth a distinct log line.
+        ref = new_error_reference()
+        logging.error(
+            "[%s] Undefined column '%s' reading user details - has users_m changed?",
+            ref,
+            e.column_name,
         )
-        logging.error(error_msg)
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=error_msg
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=client_error_detail("Could not load user details.", ref),
         )
 
     except PostgresError as e:
-        logging.error(f"SQL Execution Error: {str(e)}")
+        ref = new_error_reference()
+        logging.error("[%s] Error reading user details: %s", ref, e)
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Invalid SQL query.",
+            detail=client_error_detail("Could not load user details.", ref),
         )
 
     except Exception:

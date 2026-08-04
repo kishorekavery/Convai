@@ -2,6 +2,7 @@
 
 from .logger_config import get_logger
 from .logger_config import LOG_PROMPTS
+from .errors import new_error_reference, client_error_detail
 
 # ---------------- Database Config ----------------
 from .settings import (
@@ -160,6 +161,8 @@ TRACING_CONFIG = {
 __all__ = [
     "get_logger",
     "LOG_PROMPTS",
+    "new_error_reference",
+    "client_error_detail",
     # Database
     "DB_USERNAME",
     "DB_PASSWORD",
