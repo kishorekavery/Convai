@@ -67,14 +67,24 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
 # The binding constraint here is not CPU but database connections, because pools
 # cannot be shared across processes:
 #     workers x (concurrently active tenants + 1) x DB_MAX_CONN <= max_connections
-# At 4 workers / 3 active tenants / DB_MAX_CONN=4 that is 64, against a default
-# max_connections of 100. The previous value of 9 put the same figure at 144.
+# Measured on this deployment: max_connections is 2500 and 43 tenant databases
+# exist, so connections are not the constraint - at 4 workers the worst case is
+# 704, well inside budget. Worker count is therefore a *cache* decision.
+#
+# It is 1 because the pagination cache lives in process memory: a follow-up
+# ("show me more") only finds its cached query when it lands on the same worker
+# that served the original, so at N workers it succeeds roughly 1 time in N.
+# One async worker handles ~20 concurrent users comfortably - the event loop
+# does the I/O and BEDROCK_EXECUTOR_THREADS covers the blocking Bedrock calls.
+#
+# Raise above 1 only together with a shared query cache (Redis) or sticky
+# sessions, or follow-up pagination starts failing for most users.
 #
 # Fewer workers also means less fragmentation of the per-process caches
 # (pagination, table schemas, embeddings), since each worker keeps its own copy.
 #
 # Gunicorn reads WEB_CONCURRENCY when -w is not given, so this is overridable at
 # run time without rebuilding the image.
-ENV WEB_CONCURRENCY=4
+ENV WEB_CONCURRENCY=1
 
 CMD ["gunicorn", "main:app", "-k", "uvicorn.workers.UvicornWorker", "-b", "0.0.0.0:8000"]

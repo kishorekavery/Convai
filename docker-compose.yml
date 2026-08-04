@@ -9,10 +9,10 @@ services:
     environment:
       # Async uvicorn workers. Raise only alongside the connection budget:
       #   WEB_CONCURRENCY x (active tenants + 1) x DB_MAX_CONN <= max_connections
-      # Each worker also keeps its own pagination / schema / embedding caches,
-      # so more workers means lower cache hit rates and less reliable follow-up
-      # pagination until that state is shared.
-      - WEB_CONCURRENCY=${WEB_CONCURRENCY:-4}
+      # Each worker keeps its own pagination / schema / embedding caches, so
+      # follow-up pagination succeeds only ~1 time in N at N workers. Keep this
+      # at 1 until the query cache is shared (Redis) or sessions are sticky.
+      - WEB_CONCURRENCY=${WEB_CONCURRENCY:-1}
       - DB_MIN_CONN=${DB_MIN_CONN:-0}
       - DB_MAX_CONN=${DB_MAX_CONN:-4}
     volumes:
