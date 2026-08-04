@@ -19,6 +19,7 @@ from dataprocessing.user_query_processing import (  # noqa: E402
     get_last_and_current_user_query,
     get_last_n_exchanges,
     get_last_n_user_queries,
+    is_bare_pagination_request,
     parse_chat_turns,
 )
 from prompts.prompts_templates import format_classification_prompt  # noqa: E402
@@ -221,3 +222,44 @@ class TestClassificationPrompt:
         prompt = format_classification_prompt("hi", "")
         assert "topic switch" in prompt.lower()
         assert "A short message is not automatically a follow-up." in prompt
+
+
+class TestBarePaginationDetection:
+    """
+    Second filter behind the classifier. It occasionally labels a self-contained
+    question as pagination - especially after a run of "more" replies - and the
+    old guard then told the user their results had expired instead of answering.
+    """
+
+    @pytest.mark.parametrize(
+        "text",
+        ["more", "next 50", "show me more", "page 2", "continue", "next",
+         "give me the next 50 records", "more please", "show next page"],
+    )
+    def test_bare_pagination_phrases(self, text):
+        assert is_bare_pagination_request(text) is True
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "WOs closed in last 7 days",                        # the reported bug
+            "list the workorders created from last month to till",
+            "show more, sorted by technician",                  # more AND a change
+            "how many open calibration orders are there?",
+            "breakdown work orders for pump P-101",
+        ],
+    )
+    def test_substantive_questions_are_not_bare(self, text):
+        assert is_bare_pagination_request(text) is False
+
+    def test_a_single_domain_word_disqualifies(self):
+        # "more records" is bare; "more workorders" names a subject.
+        assert is_bare_pagination_request("more records") is True
+        assert is_bare_pagination_request("more workorders") is False
+
+    def test_empty_input(self):
+        assert is_bare_pagination_request("") is False
+        assert is_bare_pagination_request(None) is False
+
+    def test_long_input_is_never_bare(self):
+        assert is_bare_pagination_request("show me the next more records page set one") is False

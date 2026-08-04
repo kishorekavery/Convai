@@ -70,6 +70,41 @@ def get_last_n_exchanges(
     return "\n".join(lines)
 
 
+# Words that can appear in a request that asks for nothing but the next page.
+# Deliberately small: this is a second filter applied only after the classifier
+# has already said "pagination", and the two error directions are not equal.
+# Wrongly calling a real question "bare" dead-ends the user; wrongly calling a
+# bare phrase "substantive" just tries to answer it, which fails gracefully.
+_PAGINATION_WORDS = frozenset(
+    {
+        "more", "next", "page", "pages", "continue", "show", "give", "me",
+        "the", "please", "pls", "further", "another", "remaining", "rest",
+        "record", "records", "row", "rows", "result", "results", "item",
+        "items", "entry", "entries", "set", "one", "ones", "go", "on", "and",
+        "some", "few", "additional",
+    }
+)
+
+
+def is_bare_pagination_request(text: str, max_words: int = 6) -> bool:
+    """
+    True when ``text`` asks for nothing but the next page.
+
+    "more", "next 50", "show me more", "page 2" -> True
+    "WOs closed in last 7 days"                 -> False
+    "show more, sorted by technician"           -> False
+
+    A single domain word disqualifies it, which is the point: the classifier
+    occasionally labels a self-contained question as pagination - especially
+    after a run of "more" replies - and answering that question is far better
+    than telling the user their results expired.
+    """
+    words = re.findall(r"[a-z]+|\d+", (text or "").lower())
+    if not words or len(words) > max_words:
+        return False
+    return all(word.isdigit() or word in _PAGINATION_WORDS for word in words)
+
+
 def get_last_n_user_queries(chat_history: str, n: int = 3) -> list:
     """
     Extract all user queries and return the last n (default 3).

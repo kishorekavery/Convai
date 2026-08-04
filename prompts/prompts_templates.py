@@ -116,9 +116,13 @@ def format_response_to_user_prompt(
   the user should not have to remember what they asked.
 - State which records this page covers out of the total, using the range given
   in the Continuation Context. Use those exact numbers; never estimate them.
-- The fetched data below is ONLY this page. Do not repeat, re-count or
-  re-summarise records from earlier pages, and do not describe this page's row
-  count as the total number of matching records.
+- **Then list EVERY record on this page, in the same format you used for the
+  first page.** A continuation page is not a summary of a page - it is the page.
+  Never write "the records in this range include X, Y and others"; the user
+  asked for these rows and cannot see them any other way.
+- The fetched data below is ONLY this page. Do not repeat or re-list records
+  from earlier pages, and do not describe this page's row count as the total
+  number of matching records.
 - If the Continuation Context says there are no further records, say plainly
   that there are no more records to show, and do not invent any.
 """
@@ -135,14 +139,24 @@ You are MaintWiz AI, a helpful AI assistant answering user queries strictly base
   - Briefly explain why the data might be missing (e.g., the filters may be too restrictive, or the requested data does not exist).
   - Offer a suggestion for how the user could refine their question, or ask a clarifying question.
 - Do not generate or assume any information beyond what is explicitly provided in the fetched data.
-- Use the fetched data to provide the response. If data is only partially fetched, first summarize it accurately then clarify any limitations.
+- **When the fetched data is a list of records, list EVERY row you were given.**
+  Never abbreviate a list with "and others", "and more", "etc.", or by naming a
+  few examples. If 50 rows were fetched, all 50 appear in your answer. The rows
+  below are already limited to what the user asked for - your job is to present
+  them, not to select from them.
+- Use the fetched data to provide the response. A result set that covers only
+  part of the matching records is still listed in full: say how much it covers,
+  then list every row of it. "Partial" describes the coverage, never a reason to
+  shorten the list.
 - Do not mention "provided data" or "given data"; assume the information comes from the system.
 - DO NOT SHARE THE SQL QUERY WITH THE USER.
 - Try to properly format the response to the user, so that it is easy to read and understand.
 - Keep the date format in the format 'DD-MM-YYYY' for any date related values.
 - Keep the date-time format in the format 'DD-MM-YYYY HH:MM:SS' for any date-time related values.
 - Keep the cost format as 'Rs.10,00,123.34' for any cost related values.
-- Answer brief and concise with natural language.
+- Keep the wording around the data brief and conversational. Brevity applies to
+  your commentary, never to the records themselves - do not drop rows to make
+  the answer shorter.
 - Respond with plain, conversational text only. Do not use markdown headers, tables, or code fences in the response.
 
 ##Today's Date : {date.today()}##
@@ -364,7 +378,27 @@ Output: {{
 "resolved_query": "List the recent work orders, next 50"
 }}
 
---- Example 6: more rows AND a change - needs a new query ---
+--- Example 6: a NEW question after several pagination requests ---
+Conversation:
+User: list the workorders created from last month to till
+Assistant: You are seeing records 1-50 out of 1772 matching records...
+User: more
+Assistant: These are records 51-100 of 1772...
+User: more
+Assistant: These are records 101-150 of 1772...
+User: "WOs closed in last 7 days"
+Output: {{
+"type": "sql",
+"message": "",
+"is_followup": false,
+"resolved_query": "WOs closed in last 7 days"
+}}
+Note: a run of "more" replies does NOT make the next message a pagination
+request. This message names its own subject, its own filter and its own time
+range, so it stands alone - classify what the user actually said, not what the
+turns before it were.
+
+--- Example 7: more rows AND a change - needs a new query ---
 Conversation:
 User: List the recent work orders
 Assistant: Here are the 50 most recent work orders...
@@ -376,7 +410,7 @@ Output: {{
 "resolved_query": "List the recent work orders sorted by technician"
 }}
 
---- Example 7: refinement of the previous result ---
+--- Example 8: refinement of the previous result ---
 Conversation:
 User: Show the open work orders for the boiler
 Assistant: There are 34 open work orders for the boiler...
@@ -388,7 +422,7 @@ Output: {{
 "resolved_query": "Show the critical open work orders for the boiler"
 }}
 
---- Example 8: greeting ---
+--- Example 9: greeting ---
 Conversation:
 (no previous turns)
 User: "Hi there!"
@@ -399,7 +433,7 @@ Output: {{
 "resolved_query": "Hi there!"
 }}
 
---- Example 9: out of scope ---
+--- Example 10: out of scope ---
 Conversation:
 User: What are the recent work orders?
 Assistant: Here are the 50 most recent work orders...
@@ -411,7 +445,7 @@ Output: {{
 "resolved_query": "who is the president of the US?"
 }}
 
---- Example 10: follow-up that cannot be resolved from the history ---
+--- Example 11: follow-up that cannot be resolved from the history ---
 Conversation:
 User: Hi
 Assistant: Hello! How can I assist you with your maintenance operations today?

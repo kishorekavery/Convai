@@ -6,6 +6,7 @@ from .user_query_processing import (
     get_last_user_query as get_last_user_query,
     get_last_n_exchanges as get_last_n_exchanges,
     parse_chat_turns as parse_chat_turns,
+    is_bare_pagination_request as is_bare_pagination_request,
 )
 
 # from .tokenizer import tokenize as tokenize

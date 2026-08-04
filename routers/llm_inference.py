@@ -38,6 +38,7 @@ from database.sql_safety import validate_sql
 
 from dataprocessing import get_last_and_current_user_query, get_last_n_user_queries
 from dataprocessing import get_last_n_exchanges
+from dataprocessing import is_bare_pagination_request
 from models import ChatCompletionRequest
 from prompts import format_sql_prompt, format_response_to_user_prompt
 from prompts import format_large_volume_refine_prompt
@@ -288,17 +289,33 @@ async def chat_completion(
         cached_page = None
         if intent["action"] == "follow_up_pagination":
             cached_page = last_query_cache.get(database_name, user_id)
-            if not chat_history or cached_page is None:
-                logging.info(
-                    "Pagination requested but no cached query for user %s in %s.",
-                    user_id,
-                    database_name,
-                )
-                intent["action"] = "return_rejection_response"
-                intent["message"] = (
-                    "I no longer have the previous results to page through. "
-                    "Please ask your question again."
-                )
+            if cached_page is None:
+                if is_bare_pagination_request(raw_user_input):
+                    # A genuine "more" with nothing left to page. Asking the
+                    # user to restate is the only honest answer.
+                    logging.info(
+                        "Pagination requested but no cached query for user %s in %s.",
+                        user_id,
+                        database_name,
+                    )
+                    intent["action"] = "return_rejection_response"
+                    intent["message"] = (
+                        "I no longer have the previous results to page through. "
+                        "Please ask your question again."
+                    )
+                else:
+                    # The classifier labelled a self-contained question as
+                    # pagination - it does this after a run of "more" replies.
+                    # Answering the question is far better than telling the user
+                    # their results expired when they asked something new.
+                    logging.warning(
+                        "Classifier said pagination for a substantive message; "
+                        "treating it as a new question instead. Message: %r",
+                        raw_user_input,
+                    )
+                    intent["action"] = "call_sql_model"
+                    intent["type"] = "sql"
+                    intent["is_followup"] = False
 
 
         if intent["action"] == "return_greeting":
