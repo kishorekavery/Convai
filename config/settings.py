@@ -78,6 +78,12 @@ AI_SQL_STATEMENT_TIMEOUT_MS = int(os.getenv("AI_SQL_STATEMENT_TIMEOUT_MS", "3000
 # pages" hint is far cheaper than holding a connection.
 AI_SQL_COUNT_TIMEOUT_MS = int(os.getenv("AI_SQL_COUNT_TIMEOUT_MS", "10000"))
 
+# How long the readiness probe waits for the knowledge-base database before
+# declaring the instance unable to serve traffic. Must stay well below the load
+# balancer's probe interval - a probe that hangs is as bad as one that fails,
+# because the balancer keeps sending traffic while it waits.
+READINESS_TIMEOUT_SECONDS = float(os.getenv("READINESS_TIMEOUT_SECONDS", "3"))
+
 # LLM CONTEXT SETTINGS
 KB_CONTEXT_LIMIT = 10
 CONTEXT_LIMIT = 10

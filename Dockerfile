@@ -56,7 +56,10 @@ COPY . .
 # Expose the application port
 EXPOSE 8000
 
-# Healthcheck to verify the server is running
+# Docker HEALTHCHECK uses /health (liveness) deliberately, NOT /ready.
+# Restarting the container because Postgres is unreachable would be wrong - the
+# process is healthy, its dependency is not. Point the load balancer at
+# /convai/ready instead, which returns 503 when the database cannot be reached.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
 

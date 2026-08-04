@@ -23,6 +23,10 @@ services:
       - LOG_MAX_BYTES=${LOG_MAX_BYTES:-52428800}
       - LOG_BACKUP_COUNT=${LOG_BACKUP_COUNT:-10}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # Readiness probe budget. Keep well below the load balancer's probe
+      # interval: a probe that hangs is as bad as one that fails, because the
+      # balancer keeps sending traffic while it waits.
+      - READINESS_TIMEOUT_SECONDS=${READINESS_TIMEOUT_SECONDS:-3}
     volumes:
       - ./logs:/app/logs
     # Rotation of the container's stdout/stderr as captured by Docker. Without
