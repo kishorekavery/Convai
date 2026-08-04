@@ -29,7 +29,9 @@ cd chat-ui
 docker compose -f docker-compose.chatui.yml up -d --build
 ```
 
-Then open <http://localhost:8080>.
+Then open <http://localhost:3001>.
+
+Port 3001 by default — 8080 is in use by Jenkins.
 
 The compose file joins the application's **existing** network so nginx can reach
 `convai-app:8000` by service name. If your stack uses a different network name:
@@ -39,7 +41,7 @@ docker inspect convai-service -f '{{range $k,$v := .NetworkSettings.Networks}}{{
 CONVAI_NETWORK=<that-name> docker compose -f docker-compose.chatui.yml up -d
 ```
 
-Change the port with `CHAT_UI_PORT=9000`.
+Change the port with `CHAT_UI_PORT=9000 docker compose -f docker-compose.chatui.yml up -d`.
 
 ### Local development
 
