@@ -154,9 +154,47 @@ CLASSIFICATION_MODEL_TOP_P = 0.9
 COLLECTOR_PROJECT_NAME = os.getenv(
     "COLLECTOR_PROJECT_NAME", "async-mw-copilot-sql-bot-bedrock"
 )
-COLLECTOR_ENDPOINT = os.getenv(
-    "COLLECTOR_ENDPOINT", "http://maintverse.com:6006/v1/traces"
-)
+# Spans are exported over gRPC (routers/llm_inference.py builds an
+# OTLPSpanExporter from the .proto.grpc package), so this must be Phoenix's OTLP
+# gRPC receiver - port 4317, with no URL path.
+#
+# The previous default was http://maintverse.com:6006/v1/traces, which is the
+# HTTP port and the HTTP path. Handing that to a gRPC exporter makes every
+# export fail, and BatchSpanProcessor swallows the failure - so tracing goes
+# silently dark. Deployments were unaffected only because .env overrides it;
+# anyone running without that key inherited broken tracing.
+#
+# Defaults to the docker-compose service name, which is how this is deployed.
+# validate_collector_endpoint() below warns at startup if the value looks like
+# an HTTP endpoint.
+COLLECTOR_ENDPOINT = os.getenv("COLLECTOR_ENDPOINT", "http://arize-phoenix:4317")
+
+
+def validate_collector_endpoint(endpoint: str) -> list:
+    """
+    Return warnings if ``endpoint`` looks wrong for the gRPC span exporter.
+
+    Catches the class of mistake rather than one instance of it: a wrong
+    endpoint produces no exception, no log line and no spans, so without an
+    explicit check the only symptom is an empty Phoenix UI.
+    """
+    from urllib.parse import urlparse
+
+    problems = []
+    parsed = urlparse(endpoint if "//" in endpoint else f"//{endpoint}")
+
+    if parsed.path and parsed.path != "/":
+        problems.append(
+            f"has a URL path ('{parsed.path}'); the gRPC exporter expects "
+            f"host:port only. '/v1/traces' is the HTTP endpoint."
+        )
+    if parsed.port in (4318, 6006):
+        problems.append(
+            f"uses port {parsed.port}, which is Phoenix's "
+            f"{'OTLP HTTP receiver' if parsed.port == 4318 else 'UI/HTTP port'}; "
+            f"the gRPC receiver is 4317."
+        )
+    return problems
 PHOENIX_API_KEY = os.getenv("PHOENIX_API_KEY")
 PHOENIX_BATCH = os.getenv("PHOENIX_BATCH", "True").lower() == "true"
 PHOENIX_DEBUG = os.getenv("PHOENIX_DEBUG", "False").lower() == "true"

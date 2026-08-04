@@ -144,6 +144,7 @@ from .settings import (
     PHOENIX_API_KEY,
     PHOENIX_BATCH,
     PHOENIX_DEBUG,
+    validate_collector_endpoint,
 )
 
 TRACING_CONFIG = {
@@ -222,5 +223,6 @@ __all__ = [
     "PHOENIX_API_KEY",
     "PHOENIX_BATCH",
     "PHOENIX_DEBUG",
+    "validate_collector_endpoint",
     "TRACING_CONFIG",
 ]

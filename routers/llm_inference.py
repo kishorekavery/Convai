@@ -25,6 +25,7 @@ from phoenix.otel import register
 from config import get_logger
 from config import EMBEDDING_MODEL_ID, CHAT_MODEL_ID, CLASSIFICATION_MODEL_ID
 from config import COLLECTOR_ENDPOINT, COLLECTOR_PROJECT_NAME, PHOENIX_API_KEY, PHOENIX_BATCH
+from config import validate_collector_endpoint
 
 from routers import user_quota_limiter
 from routers.query_cache import last_query_cache, CachedQuery
@@ -111,11 +112,22 @@ _phoenix_exporter_headers = (
     {"authorization": f"Bearer {PHOENIX_API_KEY}"} if PHOENIX_API_KEY else {}
 )
 
+# A misconfigured endpoint fails silently: the exporter raises nothing at
+# construction, BatchSpanProcessor swallows export errors, and the only symptom
+# is an empty Phoenix UI. Check it explicitly and say so at startup.
+for _problem in validate_collector_endpoint(COLLECTOR_ENDPOINT):
+    logging.warning(
+        "COLLECTOR_ENDPOINT (%s) %s Traces will be dropped silently.",
+        COLLECTOR_ENDPOINT,
+        _problem,
+    )
+
 # Use standard gRPC OTLPSpanExporter for low latency
 grpc_exporter = OTLPSpanExporter(
     endpoint=COLLECTOR_ENDPOINT,
     headers=_phoenix_exporter_headers,
 )
+logging.info("Exporting spans over gRPC to %s", COLLECTOR_ENDPOINT)
 
 if PHOENIX_BATCH:
     tracer_provider.add_span_processor(BatchSpanProcessor(grpc_exporter))
