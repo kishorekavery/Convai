@@ -33,7 +33,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logging.error(f"Error shutting down the Bedrock executor: {e}")
 
-    # pyrefly: ignore [missing-import]
     from routers.llm_inference import tracer_provider
 
     try:
@@ -53,35 +52,15 @@ def root():
 
 @app.get("/health")
 def health_check():
-    """
-    Liveness: is this process alive?
-
-    Deliberately checks nothing external. Docker's HEALTHCHECK uses this, and
-    restarting the container because Postgres is unreachable would be wrong -
-    the process is fine, its dependency is not. Use /ready for that.
-    """
     return {"status": "ok"}
 
 
 async def _check_knowledgebase() -> dict:
-    """
-    Can we actually reach the knowledge-base database?
-
-    This is the right dependency to probe: every non-pagination request reads
-    few-shot examples from it, so an instance that cannot reach it cannot serve.
-    Tenant databases are per-request and there are 43 of them, so they are not
-    probed here.
-
-    Reuses the cached pool rather than opening a connection of its own, which
-    also keeps that pool warm between requests.
-    """
     from config import KNOWLEDGEBASE_DATABASE_NAME, READINESS_TIMEOUT_SECONDS
     from database import get_pool
 
     started = time.perf_counter()
     try:
-        # The timeout wraps acquire() as well as the query: if the pool is
-        # exhausted or the host is unreachable, acquire is where it hangs.
         async def _ping():
             pool = await get_pool(KNOWLEDGEBASE_DATABASE_NAME)
             async with pool.acquire() as conn:
@@ -105,13 +84,6 @@ async def _check_knowledgebase() -> dict:
 
 @app.get("/ready")
 async def readiness_check(response: Response):
-    """
-    Readiness: can this instance serve a request right now?
-
-    Returns 503 when it cannot, so a load balancer takes it out of rotation
-    instead of sending traffic that is guaranteed to fail. Point the balancer's
-    health check here, and Docker's HEALTHCHECK at /health.
-    """
     checks = {"knowledgebase_database": await _check_knowledgebase()}
     ready = all(c["ok"] for c in checks.values())
 

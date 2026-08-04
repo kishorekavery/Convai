@@ -4,6 +4,7 @@ from config import get_logger
 from config import KNOWLEDGEBASE_DATABASE_NAME, KNOWLEDGEBASE_SCHEMA_NAME
 
 from database import connect_to_db
+from database.sql_safety import validate_identifier
 from models import TitanEmbeddingModel
 
 logging = get_logger(__name__)
@@ -18,7 +19,7 @@ if __name__ == "__main__":
 
             async with pool.acquire() as conn:
                 await conn.execute(
-                    f"""SET search_path TO {KNOWLEDGEBASE_SCHEMA_NAME};"""
+                    f"""SET search_path TO {validate_identifier(KNOWLEDGEBASE_SCHEMA_NAME, label="knowledge base schema")};"""
                 )
                 rows = await conn.fetch("""SELECT kbe_id, kbe_user_input
                                     FROM ai.knowledge_base_examples kbe

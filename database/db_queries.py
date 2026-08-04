@@ -28,10 +28,20 @@ from database.schema_cache import table_schema_cache
 from database.sql_safety import validate_identifier
 from config import KNOWLEDGEBASE_TABLE
 
-# A table name cannot be a bind parameter, so it is interpolated - validated
-# once at import to the same identifier rules the SQL validator applies, so a
-# malformed KNOWLEDGEBASE_TABLE fails at startup rather than at query time.
+# Schema and table names cannot be bind parameters, so they are interpolated
+# into SQL below. Now that all of them come from the environment, each is
+# validated once at import against the same identifier rules the SQL validator
+# applies - letters, digits, underscores and dots only.
+#
+# Without this a value like DATA_SCHEMA='public; DROP TABLE x --' would be
+# interpolated straight into SET LOCAL search_path. Validating at import means a
+# malformed value stops the app from starting rather than failing on the first
+# request, or worse, executing.
 _KB_TABLE = validate_identifier(KNOWLEDGEBASE_TABLE, label="knowledge base table")
+_DATA_SCHEMA = validate_identifier(DATA_SCHEMA, label="data schema")
+_USER_DETAILS_SCHEMA = validate_identifier(
+    USER_DETAILS_SCHEMA, label="user details schema"
+)
 
 logging = get_logger(__name__)
 
@@ -335,7 +345,7 @@ async def execute_ai_generated_sql(sql: str, pool: Pool):
                 # search_path to public on the same pool, so the two have been
                 # overwriting each other depending on borrow order. LOCAL is
                 # scoped to this transaction and reverts on commit.
-                await conn.execute(f"SET LOCAL search_path TO {DATA_SCHEMA}")
+                await conn.execute(f"SET LOCAL search_path TO {_DATA_SCHEMA}")
                 await conn.execute(
                     f"SET LOCAL statement_timeout = {AI_SQL_STATEMENT_TIMEOUT_MS}"
                 )
@@ -423,7 +433,7 @@ async def execute_count_query(count_sql: str, pool: Pool):
     """
     async with pool.acquire() as conn:
         async with conn.transaction(readonly=True):
-            await conn.execute(f"SET LOCAL search_path TO {DATA_SCHEMA}")
+            await conn.execute(f"SET LOCAL search_path TO {_DATA_SCHEMA}")
             await conn.execute(
                 f"SET LOCAL statement_timeout = {AI_SQL_COUNT_TIMEOUT_MS}"
             )
@@ -440,7 +450,7 @@ async def fetch_user_details(user_id: str, pool: Pool):
             # pooled connection and left search_path pointing at the user schema
             # for whichever query borrowed it next.
             async with conn.transaction(readonly=True):
-                await conn.execute(f"SET LOCAL search_path TO {USER_DETAILS_SCHEMA}")
+                await conn.execute(f"SET LOCAL search_path TO {_USER_DETAILS_SCHEMA}")
                 raw_user_details = await conn.fetch(
                     "SELECT usr_id, usr_name, usr_personalcode  FROM users_m WHERE usr_id = $1;",
                     usr_id,

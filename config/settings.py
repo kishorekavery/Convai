@@ -43,21 +43,38 @@ DB_PORT = os.getenv("DB_PORT") or db_config.get("port")
 # PgBouncer.
 DB_MIN_CONN = int(os.getenv("DB_MIN_CONN", "0"))
 DB_MAX_CONN = int(os.getenv("DB_MAX_CONN", "4"))
-KNOWLEDGEBASE_DATABASE_NAME = "maintwiz"
-KNOWLEDGEBASE_SCHEMA_NAME = "ai"
+# ---------------- Knowledge base location ----------------
+# Where the few-shot examples live. All three are interpolated into SQL - a
+# table name and a schema name cannot be bind parameters - so each is validated
+# as a plain identifier at import (see database/db_queries.py). A malformed
+# value fails at startup rather than at query time.
+KNOWLEDGEBASE_DATABASE_NAME = os.getenv("KNOWLEDGEBASE_DATABASE_NAME", "maintwiz")
+KNOWLEDGEBASE_SCHEMA_NAME = os.getenv("KNOWLEDGEBASE_SCHEMA_NAME", "ai")
 
-# Table holding the few-shot examples. Configurable so the corrected copy can be
-# rolled back with one environment variable rather than a deploy.
-#   ai.knowlegebaseexamples_new - repaired: 5 broken queries fixed, LIMIT added
-#                                 to 175 row-returning SELECTs, reference tables
-#                                 corrected and case-normalised.
-#   ai.knowledge_base_examples  - the original.
-# Validated as an identifier before interpolation (it cannot be a bind
-# parameter), so it must stay letters/digits/underscores/dots.
-KNOWLEDGEBASE_TABLE = os.getenv("KNOWLEDGEBASE_TABLE", "ai.knowlegebaseexamples_new")
+# Table holding the few-shot examples, so the corrected copy can be rolled back
+# with one environment variable rather than a deploy.
+#   knowlegebaseexamples_new - repaired: 5 broken queries fixed, LIMIT added to
+#                              175 row-returning SELECTs, reference tables
+#                              corrected and case-normalised.
+#   knowledge_base_examples  - the original.
+#
+# Accepts either a bare table name, which is qualified with
+# KNOWLEDGEBASE_SCHEMA_NAME, or a fully-qualified "schema.table". The
+# fully-qualified form is still honoured so that existing .env files and the
+# documented rollback (KNOWLEDGEBASE_TABLE=ai.knowledge_base_examples) keep
+# working unchanged.
+_KNOWLEDGEBASE_TABLE_RAW = os.getenv("KNOWLEDGEBASE_TABLE", "knowlegebaseexamples_new")
+KNOWLEDGEBASE_TABLE = (
+    _KNOWLEDGEBASE_TABLE_RAW
+    if "." in _KNOWLEDGEBASE_TABLE_RAW
+    else f"{KNOWLEDGEBASE_SCHEMA_NAME}.{_KNOWLEDGEBASE_TABLE_RAW}"
+)
 
-DATA_SCHEMA = "ai"
-USER_DETAILS_SCHEMA = "public"
+# Schema holding the tenant data tables the generated SQL reads, and the schema
+# holding users_m. Both are interpolated into SET LOCAL search_path, so both are
+# validated as identifiers at import.
+DATA_SCHEMA = os.getenv("DATA_SCHEMA", "ai")
+USER_DETAILS_SCHEMA = os.getenv("USER_DETAILS_SCHEMA", "public")
 
 # How long a fetched table schema stays cached. Schemas change on migration, not
 # per request, so this removes information_schema lookups from the hot path.
