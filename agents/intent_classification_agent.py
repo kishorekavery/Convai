@@ -40,7 +40,7 @@ def parse_classification_output(intent_output: str, user_input: str) -> dict:
         raise ValueError("Empty or invalid response from classification model.")
 
     result = json.loads(clean_json_output(intent_output))
-    logging.info(f"Classification result: {result}")
+    logging.debug("Raw classification payload: %s", result)
 
     classification_type = result.get("type")
     if classification_type not in _TYPE_TO_ACTION:
@@ -89,7 +89,6 @@ def intent_classification(
     """
 
     try:
-        logging.info("Starting intent classification process...")
         ## Classify the user input to determine the intent
         intent_classification_model = ClassificationModel()
 

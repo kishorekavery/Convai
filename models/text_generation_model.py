@@ -1,6 +1,7 @@
 from time import time
 
 from config import get_logger
+from config import LOG_PROMPTS
 from config import (
     CHAT_MODEL_ID,
     CHAT_MODEL_CONTENT_TYPE,
@@ -35,8 +36,6 @@ class ChatModel(BedrockClient):
             "top_p": CHAT_MODEL_TOP_P,
         }
 
-        logging.info("Llama Model Invoked (Non Streaming Response)")
-
         start_time = time()
 
         response = self.invoke_model(payload)
@@ -58,16 +57,22 @@ class ChatModel(BedrockClient):
                 }
             )
 
-        ## log as Text
+        # Metrics only. The prompt and response are already on the Phoenix span
+        # as llm.input_messages / llm.output_messages; repeating them here was
+        # 55% of all log volume. Set LOG_PROMPTS=true to include them.
         logging.info(
-            "Llama Model (Non Streaming) Inference Log:\nPrompt: %s\nAI Response : %s\n\nInvocation Metrics:\nPrompt Token Count: %s\nOuput Token Count: %s\nReason for Stopping: %s\nInvocation Processing Time: %s",
-            str(prompt),
-            str(response_text),
-            str(prompt_tokens),
-            str(completion_tokens),
-            str(response.get("stop_reason")),
-            str(invocation_processing_time),
+            "SQL/chat model: %s prompt + %s completion tokens, stop=%s, %.2fs",
+            prompt_tokens,
+            completion_tokens,
+            response.get("stop_reason"),
+            invocation_processing_time,
         )
+        if LOG_PROMPTS:
+            logging.info(
+                "Chat model prompt:\n%s\nChat model response:\n%s",
+                prompt,
+                response_text,
+            )
 
         return response_text
 
@@ -85,9 +90,6 @@ class ChatModel(BedrockClient):
         }
 
         # "body": "{\"prompt\":\"this is where you place your input text\",\"max_gen_len\":512,\"temperature\":0.5,\"top_p\":0.9}"
-
-        # log
-        logging.info("Llama Model Invoked (Streaming Response)")
 
         for chunk in self.invoke_model_with_response_stream(payload, span):
             yield chunk

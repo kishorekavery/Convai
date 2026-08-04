@@ -1,6 +1,7 @@
 # __init__.py
 
 from .logger_config import get_logger
+from .logger_config import LOG_PROMPTS
 
 # ---------------- Database Config ----------------
 from .settings import (
@@ -155,6 +156,7 @@ TRACING_CONFIG = {
 # ---------------- Public Exports ----------------
 __all__ = [
     "get_logger",
+    "LOG_PROMPTS",
     # Database
     "DB_USERNAME",
     "DB_PASSWORD",

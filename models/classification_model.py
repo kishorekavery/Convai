@@ -1,6 +1,7 @@
 from time import time
 
 from config import get_logger
+from config import LOG_PROMPTS
 from config import (
     CLASSIFICATION_MODEL_ID,
     CLASSIFICATION_MODEL_CONTENT_TYPE,
@@ -35,8 +36,6 @@ class ClassificationModel(BedrockClient):
             "top_p": CLASSIFICATION_MODEL_TOP_P,
         }
 
-        logging.info("Classification Model Invoked (Non Streaming Response)")
-
         start_time = time()
 
         response = self.invoke_model(payload)
@@ -58,16 +57,21 @@ class ClassificationModel(BedrockClient):
                 }
             )
 
-        ## log as Text
+        # Metrics only - see the note in text_generation_model. The
+        # classification prompt is large because it carries ten worked
+        # examples, and it is identical on every request.
         logging.info(
-            "Classification Model (Non Streaming) Inference Log:\nPrompt: %s\nAI Response : %s\n\nInvocation Metrics:\nPrompt Token Count: %s\nOuput Token Count: %s\nReason for Stopping: %s\nInvocation Processing Time: %s",
-            str(prompt),
-            str(response_text),
-            str(prompt_tokens),
-            str(completion_tokens),
-            str(response.get("stop_reason")),
-            str(invocation_processing_time),
+            "Classification model: %s prompt + %s completion tokens, %.2fs",
+            prompt_tokens,
+            completion_tokens,
+            invocation_processing_time,
         )
+        if LOG_PROMPTS:
+            logging.info(
+                "Classification prompt:\n%s\nClassification response:\n%s",
+                prompt,
+                response_text,
+            )
 
         return response_text
 

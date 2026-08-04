@@ -25,6 +25,20 @@ LOG_MAX_BYTES = int(os.getenv("LOG_MAX_BYTES", str(50 * 1024 * 1024)))
 LOG_BACKUP_COUNT = int(os.getenv("LOG_BACKUP_COUNT", "10"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
+# Whether to write full prompts and model responses to the log.
+#
+# Measured over 21 MB of production logs, three "Inference Log" messages that
+# dump the prompt and response accounted for 89.6% of all volume - a single SQL
+# prompt is 15-20 KB once the table schema and ten few-shot examples are
+# interpolated. The same text is already recorded on the Arize Phoenix spans as
+# llm.input_messages / llm.output_messages, so writing it to disk duplicates it
+# and puts customer data on the log volume.
+#
+# Off by default: token counts, latency and stop reason are still logged, which
+# is what the lines are operationally useful for. Set LOG_PROMPTS=true when
+# debugging a specific generation.
+LOG_PROMPTS = os.getenv("LOG_PROMPTS", "False").lower() == "true"
+
 # A single rolling file, not one per date: RotatingFileHandler manages
 # application.log plus application.log.1 ... .N and deletes anything older.
 LOG_FILE = LOG_DIR / "application.log"

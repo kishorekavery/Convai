@@ -32,7 +32,7 @@ class TitanEmbeddingModel(BedrockClient):
             if use_cache:
                 cached = embedding_cache.get(self.model_id, text)
                 if cached is not None:
-                    logging.info("Embedding served from cache for: %s", text)
+                    logging.debug("Embedding served from cache.")
                     if span:
                         span.set_attributes(
                             {
@@ -55,8 +55,6 @@ class TitanEmbeddingModel(BedrockClient):
 
             response = self.invoke_model(payload)
 
-            logging.info("Embedding Model Invoked")
-
             if span:
                 span.set_attributes(
                     {
@@ -69,9 +67,7 @@ class TitanEmbeddingModel(BedrockClient):
             embedding = response.get("embedding")
             inputtext_token = response.get("inputTextTokenCount")
 
-            logging.info("Input Text: %s", text)
-            # logging.info("Generated Vector: %s", embedding)
-            logging.info("Input Text Token Size :%s", inputtext_token)
+            logging.info("Embedding generated: %s input tokens.", inputtext_token)
 
             if span and inputtext_token is not None:
                 span.set_attributes(

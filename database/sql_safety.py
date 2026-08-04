@@ -140,7 +140,9 @@ def validate_sql(sql: str, allowed_tables: Optional[set] = None) -> str:
                     f"Referenced table '{table}' is not in the allowed tables list."
                 )
 
-    logging.info("SQL query passed safety validation.")
+    # Debug, not info: this fires on every request and only ever says
+    # "nothing was wrong". Failures are logged by the caller at error level.
+    logging.debug("SQL query passed safety validation.")
     return sql_stripped
 
 

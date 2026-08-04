@@ -12,6 +12,7 @@ from fastapi import HTTPException, status
 from time import time
 
 from config import get_logger
+from config import LOG_PROMPTS
 from config import AWS_REGION, AWS_ACCESS_KEY, AWS_SECRET_KEY
 from config import (
     BEDROCK_CONNECT_TIMEOUT,
@@ -262,17 +263,23 @@ class BedrockClient:
                     }
                 )
 
+                # Metrics only. first-byte latency is the one worth watching -
+                # it is what the user perceives as responsiveness.
                 logging.info(
-                    "Model Invoke (Streaming) Inference Log:\nPrompt: %s\nAI Response : %s\n\nInvocation Metrics:\nPrompt Token Count: %s\nOuput Token Count: %s\n Reason for Stopping: %s\nInvocation Latency: %s\nFirst Byte Latency: %s\nInvocation Processing Time: %s",
-                    str(payload.get("prompt")),
-                    output_response,
+                    "Streaming response: %s prompt + %s completion tokens, "
+                    "first byte %sms, total %sms, wall %.2fs",
                     inputTokenCount,
                     outputTokenCount,
-                    str(chunk_json.get("stop_reason")),
-                    invocationLatency,
                     firstByteLatency,
-                    str(invocation_processing_time),
+                    invocationLatency,
+                    invocation_processing_time,
                 )
+                if LOG_PROMPTS:
+                    logging.info(
+                        "Streaming prompt:\n%s\nStreaming response:\n%s",
+                        payload.get("prompt"),
+                        output_response,
+                    )
 
         except NoCredentialsError:
             logging.error(
