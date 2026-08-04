@@ -47,11 +47,17 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Run as a non-root user. A container escape or a compromised dependency then
 # lands on an unprivileged account rather than root.
 #
+# The home directory is created (not --no-create-home): gunicorn 26 starts a
+# control server that needs a writable HOME, and without one it logs
+# "Control server error: [Errno 13] Permission denied: '/home/convai'" on every
+# start. Non-fatal - the app serves normally - but it is noise in the logs and
+# disables the control socket.
+#
 # The uid is fixed rather than auto-assigned because ./logs is bind-mounted from
 # the host: the host directory must be writable by this uid, and a stable number
 # makes that a one-time `chown -R 10001 logs` instead of a moving target.
 RUN groupadd --gid 10001 convai \
-    && useradd --uid 10001 --gid convai --no-create-home --shell /usr/sbin/nologin convai
+    && useradd --uid 10001 --gid convai --create-home --shell /usr/sbin/nologin convai
 
 WORKDIR /app
 
