@@ -6,7 +6,7 @@ set -e
 echo "🔨 Building Docker image: kishore710/convai-app for linux/amd64..."
 # Added --platform linux/amd64 so it runs on standard cloud servers instead of Mac ARM
 # Single source of truth for the version. Bump this, not the lines below.
-VERSION="${VERSION:-v9}"
+VERSION="${VERSION:-v10}"
 
 echo "Building version ${VERSION}"
 docker build --platform linux/amd64 \

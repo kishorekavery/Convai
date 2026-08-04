@@ -1,18 +1,20 @@
+# Deploys the version pinned in docker-compose.yml (APP_VERSION, default v10).
+# Roll back with:  APP_VERSION=v9 make up
 up:
-	@echo "Pulling latest image from Docker Hub..."
-	docker pull kishore710/convai-app:latest
-	@echo "Tagging image with short name..."
-	docker tag kishore710/convai-app:latest convai-app:latest
+	@echo "Pulling image $${APP_VERSION:-v10} from Docker Hub..."
+	docker compose pull
 	@echo "Starting containers..."
-	docker-compose up -d
+	docker compose up -d
+	@echo "Running:"
+	@docker compose images
 
 down:
 	@echo "Stopping containers..."
-	docker-compose down
+	docker compose down
 
 logs:
-	docker-compose logs -f
+	docker compose logs -f
 	
 restart:
 	@echo "Restarting containers..."
-	docker-compose restart
+	docker compose restart
