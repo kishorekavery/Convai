@@ -18,7 +18,11 @@ RUN npm run build
 # ---------------------------------------------------------------
 FROM nginx:1.27-alpine
 
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+# A template, not a finished config: the nginx image runs envsubst over
+# /etc/nginx/templates at start-up, so API_UPSTREAM is resolved at run time and
+# the same image works whether the API is a sibling container, on the host, or
+# on another machine.
+COPY templates/default.conf.template /etc/nginx/templates/default.conf.template
 COPY --from=builder /build/dist /usr/share/nginx/html
 
 # Shipped as a default; docker-compose mounts over it so the file can be

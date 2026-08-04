@@ -4,17 +4,29 @@
 # the main project changes, and removing this directory removes the UI
 # completely.
 #
-# It joins the application's existing network as an external network, which is
-# how nginx can reach the API by service name (convai-app) while the browser
-# only ever sees this one origin - so the backend needs no CORS middleware.
-#
 #   docker compose -f docker-compose.chatui.yml up -d --build
 #
-# Serves on host port 3001 by default (8080 is taken by Jenkins).
+# Serves on http://localhost:3001 (8080 is taken by Jenkins).
 #
-# If your application stack uses a different network name, override it:
-#   CONVAI_NETWORK=<name> docker compose -f docker-compose.chatui.yml up -d
-# Find it with:  docker inspect convai-service -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}'
+# ---------------------------------------------------------------------------
+# Pointing it at the API
+#
+# nginx proxies /convai/ to API_UPSTREAM, so the browser only ever sees one
+# origin and the backend needs no CORS middleware.
+#
+# The default reaches the API through the host gateway, which works wherever the
+# API publishes port 8000 - a container on the same host, or uvicorn running
+# directly. That deliberately avoids joining the application's docker network,
+# which made this fail with "network ... could not be found" whenever the
+# application stack was not running or was named differently.
+#
+#   same host, any setup (default)   API_UPSTREAM=host.docker.internal:8000
+#   another machine                  API_UPSTREAM=10.0.0.5:8000
+#   container-to-container           API_UPSTREAM=convai-app:8000
+#                                    ...and attach this container to that
+#                                    network manually; only worth it if the API
+#                                    stops publishing 8000 to the host.
+# ---------------------------------------------------------------------------
 
 services:
   chat-ui:
@@ -23,19 +35,18 @@ services:
     container_name: convai-chat-ui
     ports:
       - "${CHAT_UI_PORT:-3001}:80"
+    environment:
+      - API_UPSTREAM=${API_UPSTREAM:-host.docker.internal:8000}
+    extra_hosts:
+      # Docker Desktop provides host.docker.internal already; this line is what
+      # makes the same default work on Linux.
+      - "host.docker.internal:host-gateway"
     volumes:
       # Runtime config: edit and reload the page, no rebuild.
       - ./public/config.json:/usr/share/nginx/html/config.json:ro
-    networks:
-      - convai
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
     restart: unless-stopped
-
-networks:
-  convai:
-    external: true
-    name: ${CONVAI_NETWORK:-conv-ai_default}

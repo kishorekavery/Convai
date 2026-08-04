@@ -33,15 +33,27 @@ Then open <http://localhost:3001>.
 
 Port 3001 by default — 8080 is in use by Jenkins.
 
-The compose file joins the application's **existing** network so nginx can reach
-`convai-app:8000` by service name. If your stack uses a different network name:
+### Pointing it at the API
+
+nginx proxies `/convai/` to `API_UPSTREAM`. The default reaches the API through
+the host gateway, which works wherever the API publishes port 8000 — a container
+on the same host, or `uvicorn` running directly:
+
+| Where the API is | Setting |
+|---|---|
+| Same host (default) | `API_UPSTREAM=host.docker.internal:8000` |
+| Another machine | `API_UPSTREAM=10.0.0.5:8000` |
+| Same docker network | `API_UPSTREAM=convai-app:8000` + attach this container to that network |
 
 ```sh
-docker inspect convai-service -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}'
-CONVAI_NETWORK=<that-name> docker compose -f docker-compose.chatui.yml up -d
+API_UPSTREAM=10.0.0.5:8000 docker compose -f docker-compose.chatui.yml up -d
+CHAT_UI_PORT=9000          docker compose -f docker-compose.chatui.yml up -d
 ```
 
-Change the port with `CHAT_UI_PORT=9000 docker compose -f docker-compose.chatui.yml up -d`.
+This deliberately does **not** join the application's docker network. Doing so
+failed with `network conv-ai_default declared as external, but could not be
+found` whenever the application stack was not running or was named differently —
+and it is unnecessary while the API publishes 8000 to the host.
 
 ### Local development
 

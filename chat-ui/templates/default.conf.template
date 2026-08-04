@@ -1,3 +1,6 @@
+# Rendered at container start by the nginx image's envsubst entrypoint, so the
+# API upstream can change without rebuilding. See API_UPSTREAM in the compose
+# file.
 server {
     listen 80;
     server_name _;
@@ -5,9 +8,8 @@ server {
     root /usr/share/nginx/html;
     index index.html;
 
-    # config.json is runtime configuration, not part of the bundle - so the
-    # tenant, user and facility list can be changed by editing the mounted file
-    # and reloading, without rebuilding the image.
+    # Runtime configuration, not part of the bundle: edit the mounted file and
+    # reload the page, no rebuild.
     location = /config.json {
         add_header Cache-Control "no-store";
     }
@@ -20,8 +22,14 @@ server {
     # The API, reverse-proxied under the SAME ORIGIN as the UI. This is the
     # whole reason no CORS middleware is needed on the backend: the browser
     # only ever talks to this server.
+    #
+    # ${API_UPSTREAM} is one of:
+    #   convai-app:8000              API container on the same docker network
+    #   host.docker.internal:8000    API running on the host (uvicorn, or a
+    #                                published port)
+    #   10.0.0.5:8000                API on another machine
     location /convai/ {
-        proxy_pass http://convai-app:8000/convai/;
+        proxy_pass http://${API_UPSTREAM}/convai/;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -36,8 +44,8 @@ server {
         chunked_transfer_encoding on;
 
         # A cold question runs classification, embedding, retrieval, SQL
-        # generation and execution before the first token, and the backend
-        # already caps queries at 30s. Allow more than nginx's 60s default.
+        # generation and execution before the first token, and the backend caps
+        # queries at 30s. Allow more than nginx's 60s default.
         proxy_read_timeout 300s;
         proxy_send_timeout 300s;
     }
