@@ -1,29 +1,3 @@
-# Local testing stack for the Convai API.
-#
-# Separate from docker-compose.yml, which pulls a published image and is the
-# deployment file. This one BUILDS from the working tree, so a code change can
-# be tested without a build-and-push round trip to Docker Hub.
-#
-#   docker compose -f docker-compose.local.yml up -d --build   # start
-#   docker compose -f docker-compose.local.yml logs -f         # follow
-#   docker compose -f docker-compose.local.yml down -v         # stop, drop logs
-#
-# Reads .env for credentials, exactly as production does.
-#
-# ---------------------------------------------------------------------------
-# Tracing is opt-in. Without it the app still starts, but every span export
-# fails and logs an error, because COLLECTOR_ENDPOINT points at a Phoenix that
-# is not running. To include it:
-#
-#   docker compose -f docker-compose.local.yml --profile tracing up -d --build
-#
-# ---------------------------------------------------------------------------
-# The chat UI works against this without any change: it defaults to
-# host.docker.internal:8000, which is what this publishes.
-#
-#   cd chat-ui && docker compose -f docker-compose.chatui.yml up -d --build
-# ---------------------------------------------------------------------------
-
 services:
   convai-app:
     build:
@@ -49,6 +23,12 @@ services:
       # tables can be compared without editing a credentials file:
       #   KB_TABLE=knowledge_base_examples docker compose -f docker-compose.local.yml up -d
       - KNOWLEDGEBASE_TABLE=${KB_TABLE:-knowlegebaseexamples_new}
+      # Few-shot sizing, overridable per run so the cost/quality trade-off can
+      # be measured without editing .env:
+      #   KB_CONTEXT_LIMIT=5 CONTEXT_LIMIT=3 docker compose -f docker-compose.local.yml up -d
+      - KB_CONTEXT_LIMIT=${KB_CONTEXT_LIMIT:-10}
+      - CONTEXT_LIMIT=${CONTEXT_LIMIT:-10}
+      - NUMBER_OF_CHAT_EXCHANGES=${NUMBER_OF_CHAT_EXCHANGES:-3}
     volumes:
       # A NAMED volume, not ./logs. The container runs as uid 10001 while the
       # host directory is owned by the developer, so a bind mount is not

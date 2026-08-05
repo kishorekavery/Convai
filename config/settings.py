@@ -101,10 +101,34 @@ AI_SQL_COUNT_TIMEOUT_MS = int(os.getenv("AI_SQL_COUNT_TIMEOUT_MS", "10000"))
 # because the balancer keeps sending traffic while it waits.
 READINESS_TIMEOUT_SECONDS = float(os.getenv("READINESS_TIMEOUT_SECONDS", "3"))
 
-# LLM CONTEXT SETTINGS
-KB_CONTEXT_LIMIT = 10
-CONTEXT_LIMIT = 10
-NUMBER_OF_CHAT_EXCHANGES = 10
+# ---------------- LLM context sizing ----------------
+# How many few-shot examples are retrieved and pasted into each prompt. Measured
+# with the project's own tokenizer, the defaults cost ~1,785 tokens of few-shot
+# per request (115 per SQL example, 64 per response example), on every
+# non-pagination request.
+#
+# Environment-configurable so the cost/quality trade-off can be measured with
+# evals/ rather than argued about, and tuned without rebuilding the image.
+#
+# A leave-one-out study over the corpus (evals/kb_context_cost.py) found table
+# overlap still at 90% by rank 10 with no cliff, so examples 6-10 are relevant
+# rather than noise - lowering these is a real trade, not a free saving.
+
+# SQL examples retrieved from the knowledge base (the top-k of the vector
+# search). Also bounds how many distinct table schemas get loaded, since those
+# are the union of the retrieved rows' reference tables.
+KB_CONTEXT_LIMIT = max(1, int(os.getenv("KB_CONTEXT_LIMIT", "10")))
+
+# Response-formatting examples included in the final-answer prompt. Capped
+# separately because tone and formatting saturate faster than SQL patterns do -
+# a dead `if n <= 10` guard in db_queries showed this cap was always intended.
+# Never exceeds KB_CONTEXT_LIMIT, since it selects from the same retrieved rows.
+CONTEXT_LIMIT = max(1, int(os.getenv("CONTEXT_LIMIT", "10")))
+
+# Conversation turns shown to the intent classifier, used to resolve follow-ups
+# like "what about last quarter?". Default is 3, which is what the code has
+# always passed - the previous value of 10 here was never read by anything.
+NUMBER_OF_CHAT_EXCHANGES = max(1, int(os.getenv("NUMBER_OF_CHAT_EXCHANGES", "3")))
 
 # AWS Configurations
 AWS_REGION = os.getenv("AWS_REGION")

@@ -25,6 +25,7 @@ from phoenix.otel import register
 from config import get_logger
 from config import new_error_reference, client_error_detail
 from config import EMBEDDING_MODEL_ID, CHAT_MODEL_ID, CLASSIFICATION_MODEL_ID
+from config import NUMBER_OF_CHAT_EXCHANGES
 from config import COLLECTOR_ENDPOINT, COLLECTOR_PROJECT_NAME, PHOENIX_API_KEY, PHOENIX_BATCH
 from config import validate_collector_endpoint
 
@@ -225,7 +226,7 @@ async def chat_completion(
 
         # Recent turns, with the assistant's replies kept, so the classifier can
         # tell what "that" or "what about last quarter" refers to.
-        conversation_context = get_last_n_exchanges(chat_history, n=3)
+        conversation_context = get_last_n_exchanges(chat_history, n=NUMBER_OF_CHAT_EXCHANGES)
 
         logging.info("Processed User Input: %s", processed_user_input)
 

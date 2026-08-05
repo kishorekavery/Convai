@@ -47,6 +47,7 @@ Thumbs.db
 # Local scratch request payloads - may contain real tenant data
 payload.txt
 codebaseoverview.md
+docker-compose.local.yml
 
 #docs 
 /docs

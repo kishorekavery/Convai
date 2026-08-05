@@ -16,6 +16,7 @@ from config import get_logger
 from config import new_error_reference, client_error_detail
 from config import (
     KB_CONTEXT_LIMIT,
+    CONTEXT_LIMIT,
     DATA_SCHEMA,
     KNOWLEDGEBASE_DATABASE_NAME,
     USER_DETAILS_SCHEMA,
@@ -242,7 +243,10 @@ async def fetch_context(
 
             context_for_sql_generation += f"Example {n} - \nUser: {user_input_example}\nAssistant: {sql_query_example}\n\n"
 
-            if n <= 10:
+            # CONTEXT_LIMIT, not a hardcoded 10: response examples teach tone
+            # and formatting, which saturate sooner than SQL patterns, so this
+            # is capped independently of how many examples were retrieved.
+            if n <= CONTEXT_LIMIT:
                 context_for_user_response += f"Example {n} - \nUser: {user_input_example}\nAssistant: {user_response_example}\n\n"
 
             n += 1

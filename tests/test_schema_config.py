@@ -117,3 +117,55 @@ class TestIdentifierValidation:
         )
         assert out.returncode != 0
         assert "Invalid data schema" in out.stderr
+
+
+class TestContextLimits:
+    """
+    Few-shot sizing is the main cost/quality dial: the defaults cost ~1,785
+    tokens per request. Making it configurable is what allows the trade-off to
+    be measured with evals/ instead of argued about.
+    """
+
+    def _limits(self, **env):
+        code = (
+            "from config import KB_CONTEXT_LIMIT, CONTEXT_LIMIT, NUMBER_OF_CHAT_EXCHANGES; "
+            "print(KB_CONTEXT_LIMIT, CONTEXT_LIMIT, NUMBER_OF_CHAT_EXCHANGES)"
+        )
+        import os
+
+        child = dict(os.environ)
+        child.update({k: str(v) for k, v in env.items()})
+        out = subprocess.run(
+            [sys.executable, "-c", code], cwd=ROOT, env=child, capture_output=True, text=True
+        )
+        assert out.returncode == 0, out.stderr
+        return [int(x) for x in out.stdout.split()]
+
+    def test_all_three_are_configurable(self):
+        assert self._limits(
+            KB_CONTEXT_LIMIT=5, CONTEXT_LIMIT=3, NUMBER_OF_CHAT_EXCHANGES=2
+        ) == [5, 3, 2]
+
+    def test_the_documented_tuning_target(self):
+        # The 5/3 split from remaining_points: ~53% less few-shot per request.
+        kb, ctx, _ = self._limits(KB_CONTEXT_LIMIT=5, CONTEXT_LIMIT=3)
+        assert (kb, ctx) == (5, 3)
+
+    @pytest.mark.parametrize("value", ["0", "-4"])
+    def test_floored_at_one(self, value):
+        # Zero examples would send an empty ##Examples:## block and a LIMIT 0
+        # retrieval query, so the floor is a guard rather than politeness.
+        kb, ctx, turns = self._limits(
+            KB_CONTEXT_LIMIT=value, CONTEXT_LIMIT=value, NUMBER_OF_CHAT_EXCHANGES=value
+        )
+        assert (kb, ctx, turns) == (1, 1, 1)
+
+    def test_context_limit_is_wired_to_the_response_examples(self):
+        # It replaced a dead `if n <= 10` guard; if this import ever disappears
+        # the cap silently stops applying.
+        source = (ROOT / "database" / "db_queries.py").read_text()
+        assert "if n <= CONTEXT_LIMIT:" in source
+
+    def test_chat_exchanges_is_wired_to_the_classifier(self):
+        source = (ROOT / "routers" / "llm_inference.py").read_text()
+        assert "n=NUMBER_OF_CHAT_EXCHANGES" in source
