@@ -44,6 +44,11 @@ Thumbs.db
 /deprecated/
 /experiments/
 
+# Add-on front end - kept outside version control so the API repo stays the
+# API repo. Recover the last committed copy with:
+#   git checkout fccfbbd -- chat-ui/
+chat-ui/
+
 # Local scratch request payloads - may contain real tenant data
 payload.txt
 codebaseoverview.md
