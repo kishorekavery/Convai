@@ -26,7 +26,6 @@ dependencies = [
     "idna==3.10",
     "jinja2==3.1.6",
     "jmespath==1.0.1",
-    "locust>=2.38.1",
     "markdown-it-py==3.0.0",
     "markupsafe==3.0.2",
     "mdurl==0.1.2",
@@ -37,7 +36,6 @@ dependencies = [
     "pydantic==2.10.6",
     "pydantic-core==2.27.2",
     "pygments==2.19.1",
-    "pytest>=8.0.0",
     "python-dateutil==2.9.0.post0",
     "python-dotenv==1.0.1",
     "python-multipart==0.0.20",
@@ -52,7 +50,6 @@ dependencies = [
     "sqlglot>=25.0.0",
     "starlette==0.46.1",
     "tabulate==0.9.0",
-    "transformers>=4.55.3",
     "typer==0.15.2",
     "typing-extensions==4.12.2",
     "urllib3>=2.5.0",
@@ -62,8 +59,25 @@ dependencies = [
     "websockets==15.0.1",
 ]
 
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "locust>=2.38.1",
+    "gevent",
+    "geventhttpclient",
+]
+
 [tool.pytest.ini_options]
 markers = [
     "eval: correctness/groundedness evals that call real Bedrock models (cost + latency). Excluded by default; run with `pytest -m eval`.",
 ]
 addopts = "-m 'not eval'"
+
+[tool.ruff.lint.per-file-ignores]
+# Imports intentionally follow a sys.path.append() bootstrap so the script
+# can be run directly (`python path/to/file.py`) outside the package.
+"database/db_connection.py" = ["E402"]
+"evals/run_trace_groundedness_eval.py" = ["E402"]
+# Settings are imported in sections right above the config dict that uses
+# them, grouped by domain (DB, AWS, embedding, chat, ...) for readability.
+"config/__init__.py" = ["E402"]

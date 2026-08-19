@@ -104,11 +104,6 @@ class ChatCompletionRequest(BaseModel):
                     f"Each facility code must be at most {MAX_FACM_CODE_LENGTH} characters. "
                     f"Received '{code.strip()}' with {len(code.strip())} characters."
                 )
-            if not re.match(r"^[\w\s\-&.]+$", code.strip(), re.UNICODE):
-                raise ValueError(
-                    f"Facility code '{code.strip()}' contains invalid characters. "
-                    "Only letters, digits, spaces, hyphens, underscores, dots, and '&' are allowed."
-                )
         return value
 
     @field_validator("chat_history")

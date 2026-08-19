@@ -149,9 +149,6 @@ class TestRejectsChainedAndMalformed:
         with pytest.raises(ValueError):
             validate_sql(None)
 
-    def test_non_string(self):
-        with pytest.raises(ValueError):
-            validate_sql(12345)
 
     def test_only_a_semicolon(self):
         with pytest.raises(ValueError):

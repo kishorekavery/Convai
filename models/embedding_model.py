@@ -26,9 +26,7 @@ class TitanEmbeddingModel(BedrockClient):
             if not text or not isinstance(text, str):
                 raise ValueError("Input text must be a non-empty string.")
 
-            # An embedding is a pure function of (model, text), so a repeat
-            # question can reuse the vector instead of paying for another
-            # Bedrock round trip on the critical path.
+            # embedding cache block
             if use_cache:
                 cached = embedding_cache.get(self.model_id, text)
                 if cached is not None:
@@ -73,6 +71,7 @@ class TitanEmbeddingModel(BedrockClient):
                 span.set_attributes(
                     {
                         "llm.token_count.prompt": inputtext_token,
+                        "llm.token_count.completion": 0,
                         "llm.token_count.total": inputtext_token,
                     }
                 )
@@ -83,7 +82,7 @@ class TitanEmbeddingModel(BedrockClient):
                 )
                 logging.error("Failed to retrieve embedding for input:", exc_info=True)
                 raise RuntimeError("No embedding data returned by AWS Bedrock.")
-
+            
             if use_cache:
                 embedding_cache.put(self.model_id, text, embedding)
 
@@ -93,21 +92,3 @@ class TitanEmbeddingModel(BedrockClient):
             if span:
                 span.record_exception(e)
             raise RuntimeError(f"Embedding generation failed: {e}")
-
-
-if __name__ == "__main__":
-    # Initialize models
-    embedding_model = TitanEmbeddingModel()
-
-    def run_test():
-        # Example Usage
-        try:
-            # Generate Embedding
-            text = "How many parts are in the workorder WO0019282?"
-            embedding = embedding_model.generate_embedding(text)
-            print(embedding)
-
-        except Exception as e:
-            logging.debug("TEST\nError: %s", e)
-
-    run_test()

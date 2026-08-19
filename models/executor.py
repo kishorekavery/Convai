@@ -1,18 +1,4 @@
-"""
-Shared thread pool for blocking model calls.
-
-boto3 is synchronous, so every Bedrock invocation is handed to a thread via
-``loop.run_in_executor``. Passing ``None`` there uses asyncio's *default*
-executor, which is sized ``min(32, cpu_count + 4)`` - 12 threads on an 8-core
-box. Since a request holds a thread for the whole duration of a Bedrock call
-(seconds, not milliseconds), that default silently caps how many requests a
-worker can have in flight, at a number nobody chose and which changes with the
-host's core count.
-
-This module makes the pool explicit and configurable. Threads here are almost
-always blocked on network I/O rather than burning CPU, so the pool can be much
-larger than the core count.
-"""
+"""Shared thread pool for blocking model calls."""
 
 import atexit
 from concurrent.futures import ThreadPoolExecutor

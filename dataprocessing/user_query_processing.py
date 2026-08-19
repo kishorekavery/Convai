@@ -16,14 +16,8 @@ MAX_CONTEXT_MESSAGE_CHARS = 300
 
 
 def parse_chat_turns(chat_history: str) -> list:
-    """
-    Split the raw chat history into ordered (role, message) pairs.
-
-    Returns:
-        list[tuple[str, str]]: role is "User" or "Assistant", in the order the
-        turns occurred. Empty list when there is no parsable history.
-    """
-    if not chat_history or not isinstance(chat_history, str):
+    """Split the raw chat history into ordered (role, message) pairs."""
+    if not chat_history:
         return []
 
     turns = []
@@ -40,21 +34,7 @@ def get_last_n_exchanges(
     n: int = 3,
     max_message_chars: int = MAX_CONTEXT_MESSAGE_CHARS,
 ) -> str:
-    """
-    Render the most recent ``n`` exchanges as a transcript for the classifier.
-
-    Unlike get_last_n_user_queries this keeps the assistant's replies and the
-    ordering, which is what makes a reference like "that" or "what about last
-    quarter" resolvable at all.
-
-    Args:
-        chat_history (str): raw role-tagged history from the request.
-        n (int): number of exchanges (a user turn plus its reply counts as one).
-        max_message_chars (int): per-message clip length.
-
-    Returns:
-        str: "User: ...\\nAssistant: ..." lines, or "" when there is no history.
-    """
+    """Render the most recent ``n`` exchanges as a transcript for the classifier."""
     turns = parse_chat_turns(chat_history)
     if not turns:
         return ""
@@ -87,18 +67,7 @@ _PAGINATION_WORDS = frozenset(
 
 
 def is_bare_pagination_request(text: str, max_words: int = 6) -> bool:
-    """
-    True when ``text`` asks for nothing but the next page.
-
-    "more", "next 50", "show me more", "page 2" -> True
-    "WOs closed in last 7 days"                 -> False
-    "show more, sorted by technician"           -> False
-
-    A single domain word disqualifies it, which is the point: the classifier
-    occasionally labels a self-contained question as pagination - especially
-    after a run of "more" replies - and answering that question is far better
-    than telling the user their results expired.
-    """
+    """True when ``text`` asks for nothing but the next page."""
     words = re.findall(r"[a-z]+|\d+", (text or "").lower())
     if not words or len(words) > max_words:
         return False
@@ -106,9 +75,7 @@ def is_bare_pagination_request(text: str, max_words: int = 6) -> bool:
 
 
 def get_last_n_user_queries(chat_history: str, n: int = 3) -> list:
-    """
-    Extract all user queries and return the last n (default 3).
-    """
+    """Extract all user queries and return the last n."""
 
     # Find all user queries
     user_queries = re.findall(
@@ -132,9 +99,7 @@ def get_last_n_user_queries(chat_history: str, n: int = 3) -> list:
 
 
 def get_last_and_current_user_query(chat_history: str, user_query: str) -> str:
-    """
-    Concatenate the last n user queries with the current one.
-    """
+    """Concatenate the last n user queries with the current one."""
     last_n_queries = get_last_n_user_queries(chat_history, 1)
 
     if last_n_queries:
@@ -142,31 +107,3 @@ def get_last_and_current_user_query(chat_history: str, user_query: str) -> str:
         return combined
 
     return user_query
-
-
-def get_last_user_query(chat_history: str) -> str:
-    """
-    Match the first user message up to the next user: or ai: or end of string
-    """
-
-    last_user_query_match = re.search(
-        r"user:\s*(.*?)(?=\s*(?:user:|ai:)|\Z)", chat_history, re.DOTALL | re.IGNORECASE
-    )
-
-    if last_user_query_match:
-        last_user_query = last_user_query_match.group(1).strip().strip(",")
-        return last_user_query
-
-    return ""
-
-
-if __name__ == "__main__":
-    chat_text = "user: What is the PM Compliance for the given facility, ai: The PM Compliance is 10.98%, user: user23432343, ai: ai23443234"
-
-    last_and_current_user_query = get_last_and_current_user_query(
-        chat_text, "Give the constituting workorder count grouped by nature of issue"
-    )
-    last_user_query = get_last_user_query(chat_text)
-
-    print(last_and_current_user_query)
-    print(last_user_query)

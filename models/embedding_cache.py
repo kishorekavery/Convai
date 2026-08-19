@@ -1,15 +1,5 @@
 """
 Process-level cache of query embeddings.
-
-Every request embeds the user's question before retrieval, which is a real
-Bedrock round trip on the critical path. Maintenance chatbots see heavy
-repetition - "PM compliance this month", "open breakdowns" - and an embedding is
-a pure function of (model, text), so a repeat question can reuse the vector
-instead of paying for it again.
-
-Bounded LRU rather than TTL: the value never becomes stale for a given model and
-text, so entries are only evicted for memory. The model id is part of the key so
-that changing EMBEDDING_MODEL_ID cannot serve vectors from the old model.
 """
 
 import re

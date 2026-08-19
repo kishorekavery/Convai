@@ -3,13 +3,13 @@
 from .prompts_templates import (
     format_classification_prompt as format_classification_prompt,
 )
+
 from .prompts_templates import format_sql_prompt as format_sql_prompt
+
 from .prompts_templates import (
     format_response_to_user_prompt as format_response_to_user_prompt,
 )
-from .prompts_templates import (
-    format_large_volume_refine_prompt as format_large_volume_refine_prompt,
-)
+
 from .prompts_templates import (
     format_groundedness_judge_prompt as format_groundedness_judge_prompt,
 )

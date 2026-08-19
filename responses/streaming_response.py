@@ -14,6 +14,7 @@ from starlette.responses import StreamingResponse
 from opentelemetry.trace import Status, StatusCode
 from openinference.semconv.trace import SpanAttributes
 import asyncio
+from database import update_user_quota
 
 Content = typing.Union[str, bytes, memoryview]
 SyncContentStream = typing.Iterable[Content]
@@ -50,7 +51,7 @@ class CustomStreamingResponse(StreamingResponse):
         self.parent_span = parent_span
         self.buffer_container = buffer_container
         self.logging = logging
-        self.token_usage = token_usage or {"total_tokens": 0}
+        self.token_usage = token_usage or {}
 
     async def _update_user_quota(self):
         """
@@ -58,13 +59,18 @@ class CustomStreamingResponse(StreamingResponse):
         """
         try:
             async with self.pool.acquire() as conn:
-                await conn.execute(
-                    self.quota_usage_update_query,
-                    int(self.user_id),
-                    self.token_usage.get("total_tokens", 0),
+                await update_user_quota(conn, self.user_id, self.token_usage)
+                total_spent = (
+                    sum(
+                        m.get("total_tokens", 0)
+                        for m in self.token_usage.values()
+                        if isinstance(m, dict)
+                    )
+                    if isinstance(self.token_usage, dict)
+                    else 0
                 )
                 self.logging.info(
-                    f"User Quota Updated after final response generation. Spent: {self.token_usage.get('total_tokens', 0)} tokens."
+                    f"User Quota Updated after final response generation. Spent: {total_spent} tokens across models."
                 )
         except Exception as e:
             self.logging.error(f"Failed to update user quota in database: {e}")

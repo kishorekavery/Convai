@@ -1,14 +1,11 @@
 import json
 
-## Internal Packages
 from models import ClassificationModel
 from prompts import format_classification_prompt
 from config import get_logger
 
-## Initiate Logger
 logging = get_logger(__name__)
 
-# Classification type -> what the router should do with the request.
 _TYPE_TO_ACTION = {
     "sql": "call_sql_model",
     "greeting": "return_greeting",
@@ -18,24 +15,7 @@ _TYPE_TO_ACTION = {
 
 
 def parse_classification_output(intent_output: str, user_input: str) -> dict:
-    """
-    Turn the model's raw JSON into the intent dict the router consumes.
-
-    Kept separate from the Bedrock call so the parsing and its fallbacks can be
-    tested without a live model.
-
-    Args:
-        intent_output (str): raw text returned by the classification model.
-        user_input (str): the user's message, used as the resolved_query
-            fallback whenever the model omits or empties that field.
-
-    Returns:
-        dict: type, message, action, is_followup, resolved_query.
-
-    Raises:
-        json.JSONDecodeError: if the output is not valid JSON.
-        ValueError: if the output is empty or carries an unknown type.
-    """
+    """Turn the model's raw JSON into the intent dict the router consumes."""
     if not intent_output or not intent_output.strip():
         raise ValueError("Empty or invalid response from classification model.")
 
@@ -46,13 +26,10 @@ def parse_classification_output(intent_output: str, user_input: str) -> dict:
     if classification_type not in _TYPE_TO_ACTION:
         raise ValueError(f"Unexpected type: {classification_type}")
 
-    # A greeting or rejection is answered directly and never routed onward, so
-    # resolving it would have no consumer.
+    # A greeting or rejection is answered directly and never routed onward, so resolving it would have no consumer.
     is_followup = bool(result.get("is_followup", False))
 
-    # Fall back to the raw message whenever the model leaves resolved_query out,
-    # blank, or non-string. Downstream reads this field unconditionally, so it
-    # must never be empty.
+    # Fall back to the raw message whenever the model leaves resolved_query out, blank, or non-string. Downstream reads this field unconditionally, 
     resolved_query = result.get("resolved_query")
     if not isinstance(resolved_query, str) or not resolved_query.strip():
         if is_followup:
@@ -76,23 +53,13 @@ def parse_classification_output(intent_output: str, user_input: str) -> dict:
 def intent_classification(
     user_input, conversation_context, CLASSIFICATION_MODEL_ID, span
 ):
-    """Classify the user input, and resolve a follow-up into a standalone question.
-
-    Args:
-        user_input (str): The user input to classify.
-        conversation_context (str): Recent turns as a "User:/Assistant:" transcript,
-            used to decide whether the message is a follow-up and to resolve it.
-        CLASSIFICATION_MODEL_ID (str): model id, recorded on the span.
-        span: OpenTelemetry span for this classification step.
-    Returns:
-        dict: classification type, message, action, is_followup and resolved_query.
-    """
+    """Classify the user input, and resolve a follow-up into a standalone question."""
 
     try:
-        ## Classify the user input to determine the intent
+        # initialize the classification model
         intent_classification_model = ClassificationModel()
 
-        ## Prompt = Instructions + recent turns + user_input
+        # Format the prompt to be sent to the model
         classification_prompt = format_classification_prompt(
             user_input, conversation_context
         )
@@ -154,12 +121,7 @@ def intent_classification(
 
 
 def clean_json_output(output: str) -> str:
-    """Remove triple backticks and optional language tag like ```json
-    Args:
-        output (str): The raw output string from the model.
-    Returns:
-        str: Cleaned output string without triple backticks and language tags.
-    """
+    """Remove triple backticks and optional language tag like ```json"""
 
     output = output.strip()
     if output.startswith("```") and output.endswith("```"):

@@ -15,6 +15,7 @@ from .db_queries import (
 )
 from .db_queries import CHECK_IF_USER_QUOTA_LEFT as CHECK_IF_USER_QUOTA_LEFT
 from .db_queries import UPDATE_USER_QUOTA_USAGE as UPDATE_USER_QUOTA_USAGE
+from .db_queries import update_user_quota as update_user_quota
 from .db_queries import format_schema as format_schema
 from .db_queries import fetch_context as fetch_context
 from .db_queries import fetch_table_schemas as fetch_table_schemas

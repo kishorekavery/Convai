@@ -65,9 +65,6 @@ jobs:
           for i in $(seq 1 30); do
             if curl -fsS http://localhost:8000/convai/health > /dev/null 2>&1; then
               echo "liveness OK"
-              # /ready is expected to be 503 here: there is no database in CI.
-              code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/convai/ready)
-              echo "readiness returned $code (503 expected without a database)"
               exit 0
             fi
             sleep 2

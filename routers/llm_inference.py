@@ -6,18 +6,18 @@ import time
 from tabulate import tabulate
 import asyncio
 import functools
-import threading
+from starlette.concurrency import iterate_in_threadpool
 
 ## Tracing
 import contextvars
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind, Status, StatusCode
-from opentelemetry.sdk.trace import SpanProcessor
+from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
 from opentelemetry.sdk.resources import Resource
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from openinference.semconv.resource import ResourceAttributes
-from openinference.instrumentation.bedrock import BedrockInstrumentor
 from openinference.semconv.trace import SpanAttributes, DocumentAttributes, OpenInferenceSpanKindValues
-from phoenix.otel import register
 
 ## Internal Packages
 # from routers import user_quota_limiter
@@ -27,12 +27,12 @@ from config import new_error_reference, client_error_detail
 from config import EMBEDDING_MODEL_ID, CHAT_MODEL_ID, CLASSIFICATION_MODEL_ID
 from config import NUMBER_OF_CHAT_EXCHANGES
 from config import COLLECTOR_ENDPOINT, COLLECTOR_PROJECT_NAME, PHOENIX_API_KEY, PHOENIX_BATCH
-from config import validate_collector_endpoint
+
 
 from routers import user_quota_limiter
 from routers.query_cache import last_query_cache, CachedQuery
 from database import fetch_context, fetch_user_details
-from database import UPDATE_USER_QUOTA_USAGE
+from database import UPDATE_USER_QUOTA_USAGE, update_user_quota
 from database import execute_ai_generated_sql, execute_count_query, format_sql_query
 from database import next_page_sql, extract_limit, extract_offset, DEFAULT_PAGE_SIZE
 from database.sql_safety import validate_sql
@@ -42,13 +42,12 @@ from dataprocessing import get_last_n_exchanges
 from dataprocessing import is_bare_pagination_request
 from models import ChatCompletionRequest
 from prompts import format_sql_prompt, format_response_to_user_prompt
-from prompts import format_large_volume_refine_prompt
 
 ## Initiate the models
 from models import TitanEmbeddingModel
 from models import get_bedrock_executor
 from models import ChatModel
-from config import SQL_MODEL_ID, CHAT_MODEL_ID
+from config import SQL_MODEL_ID
 from agents import sql_agent
 from agents import intent_classification
 
@@ -72,15 +71,29 @@ def _split_context_examples(context: str) -> list:
     return [block.strip() for block in context.split("\n\n") if block.strip()]
 
 
-## ---- Arize Phoenix Tracer Setup  ------------------------------------------------------------------------------------------------------- #
+def record_tokens(token_usage: dict, model_id: str, prompt_tokens: int, completion_tokens: int):
+    """
+    Record model-wise token counts into token_usage dictionary.
+    """
+    if not model_id:
+        return
+    model_str = str(model_id).strip()
+    if not model_str:
+        return
+    if model_str not in token_usage:
+        token_usage[model_str] = {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        }
+    p = int(prompt_tokens or 0)
+    c = int(completion_tokens or 0)
+    token_usage[model_str]["prompt_tokens"] += p
+    token_usage[model_str]["completion_tokens"] += c
+    token_usage[model_str]["total_tokens"] += (p + c)
 
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.resources import Resource
-# from phoenix.otel.otel import SimpleSpanProcessor as PhoenixSimpleSpanProcessor
-# from phoenix.otel.otel import BatchSpanProcessor as PhoenixBatchSpanProcessor
-from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-from opentelemetry import trace as otel_trace
+
+## ---- Arize Phoenix Tracer Setup  ------------------------------------------------------------------------------------------------------- #
 
 tracer_provider = TracerProvider(
     resource=Resource.create({ResourceAttributes.PROJECT_NAME: COLLECTOR_PROJECT_NAME})
@@ -105,25 +118,12 @@ class DynamicProjectProcessor(SpanProcessor):
             span._resource = span.resource.merge(dynamic_resource)
 
 # 1. Add DynamicProjectProcessor FIRST so it runs before the exporter.
-#    Its on_end mutates span._resource synchronously at span end, before the
-#    exporter processor (below) reads/enqueues the span - so per-tenant project
-#    routing is preserved under both Simple and Batch processors.
 tracer_provider.add_span_processor(DynamicProjectProcessor())
 
 # 2. Add the gRPC Phoenix exporter SECOND.
 _phoenix_exporter_headers = (
     {"authorization": f"Bearer {PHOENIX_API_KEY}"} if PHOENIX_API_KEY else {}
 )
-
-# A misconfigured endpoint fails silently: the exporter raises nothing at
-# construction, BatchSpanProcessor swallows export errors, and the only symptom
-# is an empty Phoenix UI. Check it explicitly and say so at startup.
-for _problem in validate_collector_endpoint(COLLECTOR_ENDPOINT):
-    logging.warning(
-        "COLLECTOR_ENDPOINT (%s) %s Traces will be dropped silently.",
-        COLLECTOR_ENDPOINT,
-        _problem,
-    )
 
 # Use standard gRPC OTLPSpanExporter for low latency
 grpc_exporter = OTLPSpanExporter(
@@ -138,10 +138,7 @@ else:
     tracer_provider.add_span_processor(SimpleSpanProcessor(grpc_exporter))
 
 # Set the global tracer provider manually since we bypass `register`
-otel_trace.set_tracer_provider(tracer_provider)
-
-# Instrument Bedrock SDK once globally
-# BedrockInstrumentor().instrument(tracer_provider=tracer_provider)
+trace.set_tracer_provider(tracer_provider)
 
 # Global tracer for manual spans
 tracer = tracer_provider.get_tracer(__name__)
@@ -180,9 +177,7 @@ async def chat_completion(
     span3 = None
 
     try:
-    ## --------------------------------------------------------------------------------------------------- #
     ##    Intialization
-    ## --------------------------------------------------------------------------------------------------- #
         global tracer
 
         loop = asyncio.get_running_loop()
@@ -196,11 +191,7 @@ async def chat_completion(
         ctx = request_data['ctx']
         parent_span = request_data['parent_span']
         
-        token_usage = {
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0
-        }
+        token_usage = {}
 
         ## Assign request parameters to variables
         chat_history = request.chat_history
@@ -214,25 +205,19 @@ async def chat_completion(
         logging.info("Client User Id: %s", user_id)
         logging.info("Raw User Input: %s", raw_user_input)
 
-    ## --------------------------------------------------------------------------------------------------- #
     ##    User Input Processing
-    ## --------------------------------------------------------------------------------------------------- #
 
         # Process the user input to combine it with last user query from the chat history.
-        # Used only as the fallback if the classifier cannot resolve the message.
         processed_user_input = get_last_and_current_user_query(chat_history, raw_user_input)
 
         last_n_user_queries = f"Last User Queries: {get_last_n_user_queries(chat_history)}"
 
         # Recent turns, with the assistant's replies kept, so the classifier can
-        # tell what "that" or "what about last quarter" refers to.
         conversation_context = get_last_n_exchanges(chat_history, n=NUMBER_OF_CHAT_EXCHANGES)
 
         logging.info("Processed User Input: %s", processed_user_input)
 
-    ## --------------------------------------------------------------------------------------------------- #
     ##    Intent Classification
-    ## --------------------------------------------------------------------------------------------------- #
 
         with tracer.start_as_current_span("1. intent_classification", context=ctx, kind=SpanKind.CLIENT) as span1:
 
@@ -246,11 +231,10 @@ async def chat_completion(
                 with trace.use_span(span):
                     return intent_classification(raw_user_input, conversation_context, CLASSIFICATION_MODEL_ID, span)
 
-            intent_results = await asyncio.gather(loop.run_in_executor(get_bedrock_executor(),
-                                    functools.partial(_intent_classification, raw_user_input, conversation_context, CLASSIFICATION_MODEL_ID, span=span1))
-                                )
-
-            intent = intent_results[0]
+            intent = await loop.run_in_executor(
+                get_bedrock_executor(),
+                functools.partial(_intent_classification, raw_user_input, conversation_context, CLASSIFICATION_MODEL_ID, span=span1)
+            )
 
             span1.set_attributes({
                 "llm.output_messages.0.message.role": "assistant",
@@ -260,8 +244,6 @@ async def chat_completion(
             span1.set_status(Status(StatusCode.OK))
 
         # The classifier rewrites a follow-up into a standalone question. Every
-        # step after this point consumes the resolved form, so "what about last
-        # quarter?" is retrieved and generated against as the full question.
         resolved_query = intent.get("resolved_query") or raw_user_input
         processed_user_input = resolved_query
 
@@ -279,21 +261,15 @@ async def chat_completion(
         # Collect tokens from span1
         s1_prompt = int(span1.attributes.get("llm.token_count.prompt") or 0)
         s1_completion = int(span1.attributes.get("llm.token_count.completion") or 0)
-        token_usage["prompt_tokens"] += s1_prompt
-        token_usage["completion_tokens"] += s1_completion
-        token_usage["total_tokens"] += (s1_prompt + s1_completion)
+        record_tokens(token_usage, CLASSIFICATION_MODEL_ID, s1_prompt, s1_completion)
         
         # Guard rail: pagination needs the previous query to still be cached.
-        # A miss is expected when the follow-up is handled by a different
-        # gunicorn worker than the original query, or after the entry expired -
-        # in both cases asking the user to restate beats guessing.
         cached_page = None
         if intent["action"] == "follow_up_pagination":
             cached_page = last_query_cache.get(database_name, user_id)
             if cached_page is None:
                 if is_bare_pagination_request(raw_user_input):
                     # A genuine "more" with nothing left to page. Asking the
-                    # user to restate is the only honest answer.
                     logging.info(
                         "Pagination requested but no cached query for user %s in %s.",
                         user_id,
@@ -306,9 +282,6 @@ async def chat_completion(
                     )
                 else:
                     # The classifier labelled a self-contained question as
-                    # pagination - it does this after a run of "more" replies.
-                    # Answering the question is far better than telling the user
-                    # their results expired when they asked something new.
                     logging.warning(
                         "Classifier said pagination for a substantive message; "
                         "treating it as a new question instead. Message: %r",
@@ -324,8 +297,8 @@ async def chat_completion(
             logging.info("Returning greeting response.")
             process_time = time.time() - start_time
             async with pool.acquire() as conn:
-                await conn.execute(UPDATE_USER_QUOTA_USAGE, int(user_id), token_usage["total_tokens"])
-                logging.info(f"User Quota Updated for greeting response. Spent: {token_usage['total_tokens']} tokens.")
+                await update_user_quota(conn, user_id, token_usage)
+                logging.info("User Quota Updated for greeting response.")
             parent_span.set_attribute(SpanAttributes.OUTPUT_VALUE, intent["message"])
             parent_span.set_status(Status(StatusCode.OK))
             parent_span.end()
@@ -340,8 +313,8 @@ async def chat_completion(
             logging.info("Returning rejection response.")
             process_time = time.time() - start_time
             async with pool.acquire() as conn:
-                await conn.execute(UPDATE_USER_QUOTA_USAGE, int(user_id), token_usage["total_tokens"])
-                logging.info(f"User Quota Updated for rejection response. Spent: {token_usage['total_tokens']} tokens.")
+                await update_user_quota(conn, user_id, token_usage)
+                logging.info("User Quota Updated for rejection response.")
             parent_span.set_attribute(SpanAttributes.OUTPUT_VALUE, intent["message"])
             parent_span.set_status(Status(StatusCode.OK))
             parent_span.end()
@@ -359,9 +332,7 @@ async def chat_completion(
         sql_generation_model = ChatModel(model_id=SQL_MODEL_ID)
         chat_generation_model = ChatModel(model_id=CHAT_MODEL_ID)
     
-    ## --------------------------------------------------------------------------------------------------- #
     ##    Generate Vector of the user input
-    ## --------------------------------------------------------------------------------------------------- #
 
         # Initialize context variables
         embedded_user_input = ""
@@ -370,16 +341,10 @@ async def chat_completion(
         context_for_user_response = ""
 
         # State describing the page that this request ends up serving. For a new
-        # question these are derived from the generated SQL; for a follow-up they
-        # are advanced from the cached entry. Either way they are what gets
-        # cached at the end, so the *next* "show more" can continue from here.
         sql_template = ""
         page_offset = 0
         page_size = DEFAULT_PAGE_SIZE
         # The question these rows answer. Stored in resolved form so a later
-        # pagination request cites a standalone question rather than a fragment
-        # like "only the critical ones". For a pagination follow-up it is
-        # restored from the cache instead.
         original_user_input = resolved_query
         total_count = None
 
@@ -391,11 +356,9 @@ async def chat_completion(
                 "and advancing the OFFSET; no retrieval or SQL generation needed."
             )
             # Carry the original retrieval forward so the final-response prompt
-            # keeps the schema and formatting examples it had on page 1.
             table_schema = cached_page.table_schema
             context_for_user_response = cached_page.context_for_user_response
             # "show me more" describes nothing; the answer must be written
-            # against the question that produced page 1.
             original_user_input = cached_page.original_user_input
 
         else:
@@ -430,12 +393,10 @@ async def chat_completion(
         
             # Collect tokens from span2
             s2_prompt = int(span2.attributes.get("llm.token_count.prompt") or 0)
-            token_usage["prompt_tokens"] += s2_prompt
-            token_usage["total_tokens"] += s2_prompt
+            s2_completion = int(span2.attributes.get("llm.token_count.completion") or 0)
+            record_tokens(token_usage, EMBEDDING_MODEL_ID, s2_prompt, s2_completion)
     
-        ## --------------------------------------------------------------------------------------------------- #
         ##    Generate SQL for the user input
-        ## --------------------------------------------------------------------------------------------------- #
 
             ## Retrieve Context for the user input
             with tracer.start_as_current_span("2b. context_retrieval", context=ctx, kind=SpanKind.CLIENT) as span2b:
@@ -461,12 +422,23 @@ async def chat_completion(
                     )
 
                 span2b.set_status(Status(StatusCode.OK))
+
+            with tracer.start_as_current_span("2c. example_response_for_final_response", context=ctx, kind=SpanKind.CLIENT) as span2c:
+                span2c.set_attributes({
+                    SpanAttributes.OPENINFERENCE_SPAN_KIND: OpenInferenceSpanKindValues.RETRIEVER.value,
+                    "info": "Retrieved few-shot natural language examples for the final response generation",
+                    SpanAttributes.USER_ID: str(user_id),
+                })
+                for doc_index, example_doc in enumerate(_split_context_examples(context_for_user_response)):
+                    span2c.set_attribute(
+                        f"{SpanAttributes.RETRIEVAL_DOCUMENTS}.{doc_index}.{DocumentAttributes.DOCUMENT_CONTENT}",
+                        example_doc,
+                    )
+                span2c.set_status(Status(StatusCode.OK))
         
 
         if is_pagination:
-            ## ----------------------------------------------------------------- #
             ##    Advance the cached query to the next page (no LLM call)
-            ## ----------------------------------------------------------------- #
             with tracer.start_as_current_span("3. sql_pagination", context=ctx, kind=SpanKind.CLIENT) as span3:
                 span3.set_attributes({
                     SpanAttributes.OPENINFERENCE_SPAN_KIND: OpenInferenceSpanKindValues.TOOL.value,
@@ -489,7 +461,7 @@ async def chat_completion(
                         "Please ask a new question."
                     )
                     async with pool.acquire() as conn:
-                        await conn.execute(UPDATE_USER_QUOTA_USAGE, int(user_id), token_usage["total_tokens"])
+                        await update_user_quota(conn, user_id, token_usage)
                     parent_span.set_attribute(SpanAttributes.OUTPUT_VALUE, no_more_pages)
                     parent_span.set_status(Status(StatusCode.OK))
                     parent_span.end()
@@ -503,10 +475,6 @@ async def chat_completion(
                 sql_template, page_offset, page_size = next_page
 
                 # Re-substitute the facility codes from THIS request, so a user
-                # whose facility access changed between pages cannot keep
-                # reading the scope they had on page 1. Re-validate too: the
-                # rewritten statement must clear the same safety bar as a
-                # freshly generated one.
                 paginated_sql = format_sql_query(sql_template, facm_code)
                 try:
                     paginated_sql = validate_sql(paginated_sql)
@@ -523,7 +491,6 @@ async def chat_completion(
                     "pagination.offset": page_offset,
                     "pagination.page_size": page_size,
                     # Mirrors the attribute sql_agent sets, so the truncation
-                    # check and eval payload below read the same key on both paths.
                     "llm.output_messages.0.message.content": str(paginated_sql),
                 })
 
@@ -556,14 +523,13 @@ async def chat_completion(
 
                 ## Prompt = Instructions + table schema + example + user_input
                 # resolved_query, not raw_user_input: a follow-up like "only the
-                # critical ones" carries no subject for the SQL model to work from.
                 sql_generation_prompt = format_sql_prompt(
                     user_input=resolved_query,
                     user_details=user_details,
                     facm_code=facm_code,
                     table_schema=table_schema,
                     context_for_sql_generation=context_for_sql_generation,
-                    chat_history=last_n_user_queries,
+                    chat_history=chat_history,
                 )
 
                 span3.set_attributes({
@@ -596,7 +562,6 @@ async def chat_completion(
                 page_size = extract_limit(sql_result.executed_sql) or DEFAULT_PAGE_SIZE
 
         # Remember this page so the next "show more" can continue from it. Keyed
-        # by (database_name, user_id) - user ids are only unique within a tenant.
         if sql_template:
             last_query_cache.put(
                 database_name,
@@ -626,56 +591,6 @@ async def chat_completion(
             # Static fallback used if the refinement LLM call fails
             large_volume_response = "The data set for your request is too large to process in one go. Please refine your query (e.g., by selecting a specific facility, time range, equipment, or limiting the record count)."
 
-            with tracer.start_as_current_span("3b. large_volume_refine", context=ctx, kind=SpanKind.CLIENT) as span3b:
-                span3b.set_attributes({
-                    SpanAttributes.OPENINFERENCE_SPAN_KIND: OpenInferenceSpanKindValues.LLM.value,
-                    "info": "LLM call to generate refinement guidance for an over-limit result set",
-                    SpanAttributes.USER_ID: str(user_id),
-                })
-
-                refine_prompt = format_large_volume_refine_prompt(
-                    raw_user_input, generated_sql, num_rows, num_cols,
-                )
-
-                span3b.set_attributes({
-                    "llm.system": "bedrock",
-                    "llm.model_name": str(SQL_MODEL_ID),
-                    "llm.input_messages.0.message.role": "system",
-                    "llm.input_messages.0.message.content": str(refine_prompt),
-                })
-
-                try:
-                    def _refine_generation(prompt, span):
-                        with trace.use_span(span):
-                            return sql_generation_model.generate_response(prompt, span=span)
-
-                    refine_result = await asyncio.gather(
-                        loop.run_in_executor(
-                            get_bedrock_executor(),
-                            functools.partial(_refine_generation, refine_prompt, span=span3b),
-                        )
-                    )
-                    refined_text = refine_result[0]
-                    if refined_text and isinstance(refined_text, str) and refined_text.strip():
-                        large_volume_response = refined_text.strip()
-
-                    span3b.set_attributes({
-                        "llm.output_messages.0.message.role": "assistant",
-                        "llm.output_messages.0.message.content": str(large_volume_response),
-                    })
-                    span3b.set_status(Status(StatusCode.OK))
-                except Exception as refine_exc:
-                    logging.error("Refinement generation failed, using static message: %s", refine_exc)
-                    span3b.record_exception(refine_exc)
-                    span3b.set_status(Status(StatusCode.ERROR, description=str(refine_exc)))
-
-                # Collect tokens from span3b
-                s3b_prompt = int(span3b.attributes.get("llm.token_count.prompt") or 0)
-                s3b_completion = int(span3b.attributes.get("llm.token_count.completion") or 0)
-                token_usage["prompt_tokens"] += s3b_prompt
-                token_usage["completion_tokens"] += s3b_completion
-                token_usage["total_tokens"] += (s3b_prompt + s3b_completion)
-
             logging.info("Context length exceeded. Return Response: %s", large_volume_response)
             process_time = time.time() - start_time
             parent_span.set_attribute(SpanAttributes.OUTPUT_VALUE, large_volume_response)
@@ -685,13 +600,11 @@ async def chat_completion(
             # Collect tokens from span3
             s3_prompt = int(span3.attributes.get("llm.token_count.prompt") or 0)
             s3_completion = int(span3.attributes.get("llm.token_count.completion") or 0)
-            token_usage["prompt_tokens"] += s3_prompt
-            token_usage["completion_tokens"] += s3_completion
-            token_usage["total_tokens"] += (s3_prompt + s3_completion)
+            record_tokens(token_usage, SQL_MODEL_ID, s3_prompt, s3_completion)
             
             async with pool.acquire() as conn:
-                await conn.execute(UPDATE_USER_QUOTA_USAGE, int(user_id), token_usage["total_tokens"])
-                logging.info(f"User Quota Updated for large volume response. Spent: {token_usage['total_tokens']} tokens.")
+                await update_user_quota(conn, user_id, token_usage)
+                logging.info("User Quota Updated for large volume response.")
                 
             return Response(
                 status_code=status.HTTP_200_OK,
@@ -703,9 +616,7 @@ async def chat_completion(
         # Collect tokens from span3
         s3_prompt = int(span3.attributes.get("llm.token_count.prompt") or 0)
         s3_completion = int(span3.attributes.get("llm.token_count.completion") or 0)
-        token_usage["prompt_tokens"] += s3_prompt
-        token_usage["completion_tokens"] += s3_completion
-        token_usage["total_tokens"] += (s3_prompt + s3_completion)
+        record_tokens(token_usage, SQL_MODEL_ID, s3_prompt, s3_completion)
 
         if table_rows:
             ## Convert each asyncpg Record to a dictionary
@@ -713,9 +624,6 @@ async def chat_completion(
             table_rows_str = tabulate(data, headers="keys", tablefmt="simple")
         
             # --- Two-pass check: is this page one of several? ---
-            # A full page is the signal that more rows may exist. Counting the
-            # unpaginated query tells us whether to offer "more", and on page 2+
-            # lets us report which slice the user is looking at.
             if num_rows == page_size and sql_template:
                 with tracer.start_as_current_span("3c. truncation_check", context=ctx, kind=SpanKind.CLIENT) as span3c:
                     span3c.set_attributes({
@@ -725,7 +633,6 @@ async def chat_completion(
                     })
 
                     # sql_template is already fence-free and semicolon-free.
-                    # Drop the outer paging clauses, then count what remains.
                     count_inner = re.sub(r"(?i)\bOFFSET\s+\d+", "", sql_template)
                     count_inner = re.sub(r"(?i)\bLIMIT\s+\d+", "", count_inner).strip()
                     count_sql = f"SELECT COUNT(*) FROM ({count_inner}) AS _count_sub"
@@ -756,19 +663,15 @@ async def chat_completion(
                         span3c.set_status(Status(StatusCode.OK))
                     except Exception as e:
                         # A failed count only costs the "more" hint, so log and
-                        # carry on with the rows we already have.
                         logging.warning(f"Failed to fetch total count for truncated results: {e}")
                         span3c.record_exception(e)
                         span3c.set_status(Status(StatusCode.ERROR, description=str(e)))
         
             table_rows = table_rows_str
 
-    ## --------------------------------------------------------------------------------------------------- #
     ##    Generate Final Response for the user input
-    ## --------------------------------------------------------------------------------------------------- #
 
         # On a follow-up the user's message ("more") describes neither the data
-        # nor the position in the result set, so both are stated explicitly.
         pagination_context = ""
         if is_pagination:
             context_parts = [
@@ -805,7 +708,7 @@ async def chat_completion(
                     })
                     
                     response_to_user_prompt = format_response_to_user_prompt(raw_user_input, context_for_user_response, table_rows,
-                                                                             chat_history=last_n_user_queries,
+                                                                             chat_history=chat_history,
                                                                              pagination_context=pagination_context)
 
                     span4.set_attributes({
@@ -817,24 +720,12 @@ async def chat_completion(
                         "metadata.user_question": str(raw_user_input),
                     })
 
-                    queue = asyncio.Queue()
-
-                    # Background worker (runs in thread)
-                    def producer():
+                    def stream_generator():
                         with trace.use_span(span4):
-                            try:
-                                for chunk in chat_generation_model.generate_stream_response(response_to_user_prompt, span4):
-                                    loop.call_soon_threadsafe(queue.put_nowait, chunk)
-                            finally:
-                                loop.call_soon_threadsafe(queue.put_nowait, None)  # signal end of stream
+                            for chunk in chat_generation_model.generate_stream_response(response_to_user_prompt, span4):
+                                yield chunk
 
-                    threading.Thread(target=producer, daemon=True).start()
-
-                    # Consume from queue as items arrive
-                    while True:
-                        chunk = await queue.get()
-                        if chunk is None:  # end of stream
-                            break
+                    async for chunk in iterate_in_threadpool(stream_generator()):
                         buffer_container.append(chunk)
                         yield chunk
                     
@@ -856,9 +747,8 @@ async def chat_completion(
                     # Collect tokens from span4
                     s4_prompt = int(span4.attributes.get("llm.token_count.prompt") or 0)
                     s4_completion = int(span4.attributes.get("llm.token_count.completion") or 0)
-                    token_usage["prompt_tokens"] += s4_prompt
-                    token_usage["completion_tokens"] += s4_completion
-                    token_usage["total_tokens"] += (s4_prompt + s4_completion)
+                    # The Bedrock client natively extracts token metrics from the stream
+                    record_tokens(token_usage, CHAT_MODEL_ID, s4_prompt, s4_completion)
                 
         # Returns a streaming response
         process_time = time.time() - start_time
@@ -887,8 +777,8 @@ async def chat_completion(
             parent_span.end()
             
             async with pool.acquire() as conn:
-                await conn.execute(UPDATE_USER_QUOTA_USAGE, int(user_id), token_usage["total_tokens"])
-                logging.info(f"User Quota Updated for eval mode. Spent: {token_usage['total_tokens']} tokens.")
+                await update_user_quota(conn, user_id, token_usage)
+                logging.info("User Quota Updated for eval mode.")
             
             return JSONResponse(
                 content=payload,
@@ -906,16 +796,10 @@ async def chat_completion(
 
     except HTTPException as http_exc:
         try:
-            total_tokens_spent = 0
-            for span_var in [span1, span2, span3]:
-                if span_var and hasattr(span_var, "attributes"):
-                    p_tokens = int(span_var.attributes.get("llm.token_count.prompt") or 0)
-                    c_tokens = int(span_var.attributes.get("llm.token_count.completion") or 0)
-                    total_tokens_spent += (p_tokens + c_tokens)
-            if total_tokens_spent > 0 and 'pool' in locals() and 'user_id' in locals():
+            if token_usage and 'pool' in locals() and 'user_id' in locals():
                 async with pool.acquire() as conn:
-                    await conn.execute(UPDATE_USER_QUOTA_USAGE, int(user_id), total_tokens_spent)
-                    logging.info(f"User Quota Updated on HTTPException. Spent: {total_tokens_spent} tokens.")
+                    await update_user_quota(conn, user_id, token_usage)
+                    logging.info("User Quota Updated on HTTPException.")
         except Exception as e_quota:
             logging.error(f"Failed to update user quota on HTTPException: {e_quota}")
 
@@ -926,22 +810,14 @@ async def chat_completion(
     
     except Exception as e:
         try:
-            total_tokens_spent = 0
-            for span_var in [span1, span2, span3]:
-                if span_var and hasattr(span_var, "attributes"):
-                    p_tokens = int(span_var.attributes.get("llm.token_count.prompt") or 0)
-                    c_tokens = int(span_var.attributes.get("llm.token_count.completion") or 0)
-                    total_tokens_spent += (p_tokens + c_tokens)
-            if total_tokens_spent > 0 and 'pool' in locals() and 'user_id' in locals():
+            if token_usage and 'pool' in locals() and 'user_id' in locals():
                 async with pool.acquire() as conn:
-                    await conn.execute(UPDATE_USER_QUOTA_USAGE, int(user_id), total_tokens_spent)
-                    logging.info(f"User Quota Updated on Exception. Spent: {total_tokens_spent} tokens.")
+                    await update_user_quota(conn, user_id, token_usage)
+                    logging.info("User Quota Updated on Exception.")
         except Exception as e_quota:
             logging.error(f"Failed to update user quota on Exception: {e_quota}")
 
         # The reference ties this log line, the span and the client's message
-        # together, so the full traceback stays server-side without losing the
-        # ability to investigate a specific report.
         ref = new_error_reference()
         logging.error("[%s] Unhandled error in chat_completion", ref, exc_info=True)
         parent_span.set_attribute("error.reference", ref)

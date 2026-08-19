@@ -99,10 +99,12 @@ class TestBatchedFetch:
         assert asyncio.run(db_queries.fetch_table_schemas("tenant_a", [], pool)) == {}
         assert pool.queries == []
 
-    def test_unknown_table_yields_empty_schema(self, clean_cache):
+    def test_case_insensitive_sql_query(self, clean_cache):
         pool = FakePool(COLUMNS)
-        result = asyncio.run(db_queries.fetch_table_schemas("tenant_a", ["nope"], pool))
-        assert result["nope"] == ""
+        asyncio.run(db_queries.fetch_table_schemas("tenant_a", ["work_orders"], pool))
+        query, _ = pool.queries[0]
+        assert "LOWER(table_name) = ANY($2)" in query
+        assert "LOWER(table_schema) IN" in query
 
 
 class TestCaching:

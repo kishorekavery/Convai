@@ -1,19 +1,4 @@
-"""
-Shared asyncpg connection-pool registry.
-
-One pool is created per database name and reused across all requests handled by
-this process, instead of creating (and leaking) a new pool per request. asyncpg
-pools are safe to share across concurrent tasks within a single event loop.
-
-Each uvicorn worker is a separate process with its own module state, so it gets
-its own registry - this is correct, since asyncpg pools cannot be shared across
-processes.
-
-Connection-budget constraint to respect when sizing pools / workers:
-    workers x (num_client_dbs + 1 knowledgebase) x DB_MAX_CONN <= Postgres max_connections
-For many tenants or high worker counts, raise Postgres max_connections or front
-the database with PgBouncer.
-"""
+"""Shared asyncpg connection-pool registry."""
 
 import asyncio
 
@@ -24,27 +9,20 @@ from database.db_connection import connect_to_db
 
 logging = get_logger(__name__)
 
-# Cache of database_name -> live pool, shared for the lifetime of the process.
+# Cache of database_name -> live pool
 _pools: dict[str, Pool] = {}
-
-# One lock per database name so concurrent first-requests for the same database
-# do not race to create duplicate pools.
+# Per-database locks to prevent concurrent duplicate pool creation
 _locks: dict[str, asyncio.Lock] = {}
-
-# Guards creation of the per-database locks themselves.
+# Global lock to safely create per-database locks
 _registry_lock = asyncio.Lock()
 
 
 async def get_pool(database_name: str) -> Pool:
-    """
-    Return a cached connection pool for ``database_name``, creating it on first
-    use. Subsequent calls return the same pool.
-    """
+    """Return a cached connection pool for ``database_name``."""
     pool = _pools.get(database_name)
     if pool is not None:
         return pool
 
-    # Get (or create) the lock dedicated to this database name.
     async with _registry_lock:
         lock = _locks.get(database_name)
         if lock is None:
@@ -52,8 +30,7 @@ async def get_pool(database_name: str) -> Pool:
             _locks[database_name] = lock
 
     async with lock:
-        # Re-check inside the lock: another task may have created it while we
-        # were waiting.
+        # Double-checked locking: check if pool was created while waiting for the lock
         pool = _pools.get(database_name)
         if pool is None:
             logging.info("Creating shared connection pool for database: %s", database_name)

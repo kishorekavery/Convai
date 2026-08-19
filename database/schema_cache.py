@@ -1,20 +1,4 @@
-"""
-Process-level cache of formatted table schemas.
-
-Schemas change on migration, not per request, but the retrieval step re-read
-them from ``information_schema.columns`` on every call. That view is a join over
-pg_attribute/pg_class/pg_namespace/pg_type with a per-row privilege check, and
-the database is remote, so those reads sat on the critical path of every
-request before SQL generation could begin.
-
-Entries are keyed by (database_name, table_name) because each tenant has its own
-database and the same table name can have a different shape in each.
-
-A negative result (table not found) is cached too - it is the correct answer
-until the next migration, and caching it stops a mistyped or renamed table from
-being looked up again on every request. The TTL bounds how long any staleness,
-positive or negative, can persist.
-"""
+"""Process-level cache of formatted table schemas."""
 
 import threading
 import time
@@ -67,10 +51,7 @@ class TableSchemaCache:
             )
 
     def invalidate(self, database_name: str, table_name: Optional[str] = None) -> None:
-        """
-        Drop cached schemas. Call after a migration; without a table_name the
-        whole database is dropped.
-        """
+        """Drop cached schemas."""
         with self._lock:
             if table_name is not None:
                 self._entries.pop(self._key(database_name, table_name), None)

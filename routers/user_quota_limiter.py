@@ -40,11 +40,6 @@ async def user_quota_limiter(request: ChatCompletionRequest, tracer, parent_span
         with tracer.start_as_current_span(
             "Rate Limiter", context=ctx, kind=SpanKind.INTERNAL
         ) as rate_limiter:
-            # changed
-            # rate_limiter.set_attributes({
-            #         SpanAttributes.OPENINFERENCE_SPAN_KIND: OpenInferenceSpanKindValues.TOOL.value,
-            #         "info": "Rate Limiter"
-            #     })
             rate_limiter.set_attributes(
                 {
                     SpanAttributes.OPENINFERENCE_SPAN_KIND: OpenInferenceSpanKindValues.TOOL.value,
@@ -78,7 +73,7 @@ async def user_quota_limiter(request: ChatCompletionRequest, tracer, parent_span
                 row = await conn.fetchrow(CHECK_IF_USER_QUOTA_LEFT, user_id)
 
                 if not row:
-                    error = f"For the user: '{user_id}' in '{database_name}'. Rate limit exceeded"
+                    error = f"For the user: '{user_id}' in '{database_name}'. Token limit exceeded"
                     logging.exception(error)
                     rate_limiter.set_status(
                         Status(StatusCode.ERROR, description=str(error))
@@ -90,14 +85,14 @@ async def user_quota_limiter(request: ChatCompletionRequest, tracer, parent_span
 
                     raise HTTPException(
                         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                        detail="Rate limit exceeded",
+                        detail="Token limit exceeded",
                     )
 
-                user_quota = row["uaq_quota_limit"]
-                user_quota_used = row["uaq_used_count"]
+                user_quota = row["monthly_token_limit"]
+                user_quota_used = row["token_used_count"]
 
                 dict_row = dict(row)
-                username = dict_row.get("uaq_username")
+                username = dict_row.get("user_name")  # Graceful fallback if username doesn't exist
 
                 metadata_user_quota_details = {
                     "metadata.user_quota_details.quota": user_quota,

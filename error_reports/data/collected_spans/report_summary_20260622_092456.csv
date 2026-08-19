@@ -1,2 +1,0 @@
-tag,phoenix_base_url,lookback_days,lookback_hours,all_errors_total,sql_failures_total,sql_execution_errors,sql_empty_results,projects,sql_errors_coromandel,errors_3_sql_generation,errors_chat_chain
-20260622_092456,http://maintverse.com:6006,17.0,408,11,7,2,5,coromandel,7,7,4

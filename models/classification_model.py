@@ -82,7 +82,7 @@ if __name__ == "__main__":
         classification_model = ClassificationModel()
 
         prompt = """                <|begin_of_text|><|start_header_id|>system<|end_header_id|>
-                You are a helpful AI assistant for Equipment Maintenance Expertise. Generate resopnse with 10 words<|eot_id|><|start_header_id|>user<|end_header_id|>
+                You are a helpful AI assistant for Equipment Maintenance Expertise. Generate response with 10 words<|eot_id|><|start_header_id|>user<|end_header_id|>
                 What can you help me with?<|eot_id|><|start_header_id|>assistant<|end_header_id|>
                 """
 
